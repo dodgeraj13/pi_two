@@ -1,0 +1,3 @@
+
+Scoreboard: 
+sudo ./main.py --led-rows=64 --led-cols=64 --led-gpio-mapping=adafruit-hat-pwm --led-brightness=60 --led-slowdown-gpio=2

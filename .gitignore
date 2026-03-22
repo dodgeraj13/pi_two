@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Cache
+.cache/
+
+# Logs
+*.log
+output.log
+
+# Environment files
+.env
+.env.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp files
+*.tmp
+*.temp
+
+# Bash history
+.bash_history
+.bash_aliases
+.bashrc
+.bash_logout
+.profile
+.sudo_as_admin_successful
+
+# Output files
+output.log
