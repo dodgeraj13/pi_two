@@ -1,12 +1,20 @@
-import numpy as np, requests, math, time, threading
+import numpy as np, requests, math, time, threading, os
 from PIL import Image, ImageFont, ImageDraw
 from io import BytesIO
+from datetime import datetime
 
 class SpotifyScreen:
     def __init__(self, config, modules, fullscreen):
         self.modules = modules
+        self.config = config
 
         self.font = ImageFont.truetype("fonts/tiny.otf", 5)
+
+        # Load larger font for clock
+        try:
+            self.clock_font = ImageFont.truetype("fonts/4x6.bdf", 6)
+        except:
+            self.clock_font = ImageFont.truetype("fonts/tiny.otf", 5)
 
         self.canvas_width = 64
         self.canvas_height = 64
@@ -44,6 +52,21 @@ class SpotifyScreen:
         self.fetch_interval = 1
         self.spotify_module = self.modules['spotify']
 
+        # Idle fallback state
+        self.idle_fallback = ""  # "", "digital_clock", "analog_clock", "last_album", "custom"
+        self.idle_delay = 5  # Seconds before switching to fallback
+        self.idle_start_time = None  # When idle started
+        self.custom_album_art = None
+        self.custom_album_url = ""
+        self.last_custom_fetch = 0
+        self.custom_fetch_interval = 30  # Fetch custom album art every 30 seconds max
+
+        # Backend URL for fetching custom album
+        if config is not None and 'Spotify' in config and 'backend_url' in config['Spotify']:
+            self.backend_url = config['Spotify']['backend_url']
+        else:
+            self.backend_url = os.environ.get('BACKEND_URL', 'https://matrix-backend-lv4k.onrender.com')
+
         self.response = None
         self.thread = threading.Thread(target=self.getCurrentPlaybackAsync)
         self.thread.start()
@@ -55,6 +78,162 @@ class SpotifyScreen:
             self.response = self.spotify_module.getCurrentPlayback()
             time.sleep(1)
 
+    def generateClockFrame(self):
+        """Generate a digital clock frame for idle fallback"""
+        frame = Image.new("RGB", (self.canvas_width, self.canvas_height), (0, 0, 0))
+        draw = ImageDraw.Draw(frame)
+
+        now = datetime.now()
+        time_str = now.strftime("%I:%M")
+        date_str = now.strftime("%m/%d")
+
+        # Draw time (large, centered)
+        try:
+            # Try to use a larger font if available
+            time_font = ImageFont.truetype("fonts/6x12.bdf", 12)
+        except:
+            time_font = self.font
+
+        # Calculate center position for time
+        bbox = draw.textbbox((0, 0), time_str, font=time_font)
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
+        x = (self.canvas_width - text_width) // 2
+        y = (self.canvas_height - text_height) // 2 - 4
+
+        draw.text((x, y), time_str, fill=(255, 255, 255), font=time_font)
+
+        # Draw date (smaller, below time)
+        date_bbox = draw.textbbox((0, 0), date_str, font=self.font)
+        date_width = date_bbox[2] - date_bbox[0]
+        date_x = (self.canvas_width - date_width) // 2
+        date_y = y + text_height + 4
+
+        draw.text((date_x, date_y), date_str, fill=(150, 150, 150), font=self.font)
+
+        return frame
+
+    def polar_point(self, cx, cy, r, deg):
+        """Convert polar to cartesian coordinates"""
+        a = math.radians(deg)
+        return (cx + int(round(r * math.cos(a))), cy + int(round(r * math.sin(a))))
+
+    def generateAnalogClockFrame(self):
+        """Generate an analog clock frame for idle fallback"""
+        frame = Image.new("RGB", (self.canvas_width, self.canvas_height), (0, 0, 0))
+        draw = ImageDraw.Draw(frame)
+
+        cx, cy = 32, 32  # Center of 64x64 canvas
+        radius = 30
+
+        # Draw outer ring
+        ring_color = (220, 230, 255)
+        tick_color = (180, 190, 210)
+        draw.ellipse([cx - radius, cy - radius, cx + radius, cy + radius], outline=ring_color, width=1)
+
+        # Draw tick marks
+        for m in range(60):
+            ang = m * 6
+            r1 = radius - 3 if m % 5 == 0 else radius - 1
+            r2 = radius
+            x1, y1 = self.polar_point(cx, cy, r1, ang - 90)
+            x2, y2 = self.polar_point(cx, cy, r2, ang - 90)
+            c = ring_color if m % 5 == 0 else tick_color
+            draw.line((x1, y1, x2, y2), fill=c)
+
+        # Draw hour numbers (12, 3, 6, 9)
+        try:
+            num_font = ImageFont.truetype("fonts/4x6.bdf", 6)
+        except:
+            num_font = self.font
+
+        white = (220, 230, 255)
+        # 12 at top
+        draw.text((cx - 4, 6), "12", fill=white, font=num_font)
+        # 3 at right
+        draw.text((cx + radius - 6, cy - 3), "3", fill=white, font=num_font)
+        # 6 at bottom
+        draw.text((cx - 2, cy + radius - 8), "6", fill=white, font=num_font)
+        # 9 at left
+        draw.text((cx - radius + 1, cy - 3), "9", fill=white, font=num_font)
+
+        # Draw hands
+        now = datetime.now()
+        hour = now.hour % 12
+        minute = now.minute
+
+        hour_color = (255, 210, 120)
+        minute_color = (120, 200, 255)
+        center_color = (255, 255, 255)
+
+        # Calculate angles
+        minute_angle = (minute % 60) * 6 - 90
+        hour_angle = ((hour % 12) + minute / 60.0) * 30 - 90
+
+        # Minute hand (longer)
+        min_len = 26
+        mx, my = self.polar_point(cx, cy, min_len, minute_angle)
+        draw.line((cx, cy, mx, my), fill=minute_color, width=2)
+
+        # Hour hand (shorter)
+        hr_len = 18
+        hx, hy = self.polar_point(cx, cy, hr_len, hour_angle)
+        draw.line((cx, cy, hx, hy), fill=hour_color, width=3)
+
+        # Center cap
+        draw.ellipse([cx - 1, cy - 1, cx + 1, cy + 1], fill=center_color)
+
+        return frame
+
+    def fetchCustomAlbumArt(self):
+        """Fetch custom album art from backend for idle fallback"""
+        # Rate limit
+        current_time = time.time()
+        if current_time - self.last_custom_fetch < self.custom_fetch_interval:
+            return self.custom_album_art
+
+        self.last_custom_fetch = current_time
+
+        try:
+            # Fetch custom album from backend
+            resp = requests.get(f"{self.backend_url}/now-playing?mode=custom", timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                art_url = data.get('album_art')
+                if art_url and art_url != self.custom_album_url:
+                    self.custom_album_url = art_url
+                    # Download the image
+                    img_resp = requests.get(art_url, timeout=5)
+                    img = Image.open(BytesIO(img_resp.content))
+                    self.custom_album_art = img.resize((self.canvas_width, self.canvas_height), Image.LANCZOS)
+                    print(f"[spotify_player] Loaded custom album art for idle fallback")
+        except Exception as e:
+            print(f"[spotify_player] Failed to fetch custom album art: {e}")
+
+        return self.custom_album_art
+
+    def generateIdleFrame(self, fallback_mode):
+        """Generate frame for idle state based on fallback mode"""
+        if fallback_mode == "digital_clock":
+            return self.generateClockFrame()
+        elif fallback_mode == "analog_clock":
+            return self.generateAnalogClockFrame()
+        elif fallback_mode == "last_album":
+            # Keep showing the last album art
+            if self.current_art_img:
+                frame = Image.new("RGB", (self.canvas_width, self.canvas_height), (0, 0, 0))
+                frame.paste(self.current_art_img, (0, 0))
+                return frame
+            return Image.new("RGB", (self.canvas_width, self.canvas_height), (0, 0, 0))
+        elif fallback_mode == "custom":
+            art = self.fetchCustomAlbumArt()
+            if art:
+                frame = Image.new("RGB", (self.canvas_width, self.canvas_height), (0, 0, 0))
+                frame.paste(art, (0, 0))
+                return frame
+        # Default: black screen
+        return Image.new("RGB", (self.canvas_width, self.canvas_height), (0, 0, 0))
+
     def generate(self):
         if not self.spotify_module.queue.empty():
             self.response = self.spotify_module.queue.get()
@@ -62,6 +241,33 @@ class SpotifyScreen:
         return self.generateFrame(self.response)
 
     def generateFrame(self, response):
+        # Handle idle fallback response
+        if response is not None and isinstance(response, tuple) and len(response) >= 2 and response[0] == 'idle':
+            fallback_mode = response[1]
+            idle_delay = response[2] if len(response) > 2 else 5
+
+            self.is_playing = False
+
+            # Track idle start time
+            if self.idle_start_time is None:
+                self.idle_start_time = time.time()
+
+            # Check if we should show fallback yet
+            idle_elapsed = time.time() - self.idle_start_time
+            if idle_elapsed >= idle_delay:
+                # Show fallback after delay
+                idle_frame = self.generateIdleFrame(fallback_mode)
+                return (idle_frame, False)
+            else:
+                # Still in grace period, show last album art
+                frame = Image.new("RGB", (self.canvas_width, self.canvas_height), (0, 0, 0))
+                if self.current_art_img:
+                    frame.paste(self.current_art_img, (0, 0))
+                return (frame, False)
+
+        # Reset idle timer when playing
+        self.idle_start_time = None
+
         # determine state
         if response is not None:
             artist, title, art_url, self.is_playing, progress_ms, duration_ms = response

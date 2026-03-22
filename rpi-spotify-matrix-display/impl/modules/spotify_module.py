@@ -198,7 +198,10 @@ class SpotifyModule:
 
             if not data.get('is_playing'):
                 self.isPlaying = False
-                return None
+                # Return idle fallback info for when not playing
+                idle_fallback = data.get('idle_fallback', '')
+                idle_delay = data.get('idle_delay', 5)
+                return ('idle', idle_fallback, idle_delay)
 
             # Extract track info
             artist = data.get('artist', 'Unknown')
