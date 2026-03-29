@@ -1,0 +1,12 @@
+[Weather]
+# OpenWeatherMap API key (get from https://openweathermap.org/api)
+api_key = YOUR_OPENWEATHER_API_KEY_HERE
+
+# Location format: City,CountryCode (e.g., Hayward,CA,US)
+location = Hayward,CA,US
+
+# Units: imperial (F) or metric (C)
+units = imperial
+
+# Provider: openweathermap (currently only supported)
+provider = openweathermap

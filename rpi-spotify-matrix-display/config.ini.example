@@ -1,0 +1,37 @@
+[Spotify]
+# Use backend OAuth (recommended - shared with web app)
+# Set to true to use the centralized backend for Spotify auth
+use_backend = true
+
+# Backend URL (required when use_backend=true)
+backend_url = https://your-backend-url
+
+# LOCAL AUTH MODE (only needed when use_backend=false)
+# These are kept for fallback/local OAuth mode
+# Get credentials from https://developer.spotify.com/dashboard
+# client_id = your_spotify_client_id_here
+# client_secret = your_spotify_client_secret_here
+# redirect_uri = http://127.0.0.1:8080/callback
+
+# Device whitelist - only display when these devices are active
+# Comma-separated list of device names (leave empty for all devices)
+# device_whitelist = Pi Display, Living Room Speaker
+
+[Matrix]
+# LED Matrix hardware configuration
+hardware_mapping = adafruit-hat-pwm
+
+# Brightness (0-100)
+brightness = 70
+
+# GPIO slowdown (1-4, higher for longer cables)
+gpio_slowdown = 2
+
+# Refresh rate limit (0 = unlimited)
+limit_refresh_rate_hz = 0
+
+# Shutdown delay (prevent flickering)
+shutdown_delay = 999999999
+
+# Rotation: 0, 90, 180, or 270 degrees
+pixel_mapper_config = Rotate:90

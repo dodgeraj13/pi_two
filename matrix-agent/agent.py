@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 BASE = Path(__file__).resolve().parent
 load_dotenv(BASE / ".env")
 
-API_TOKEN    = os.getenv("API_TOKEN", "MY_SUPER_TOKEN_123")
+API_TOKEN    = os.getenv("API_TOKEN", "")  # Required: Set in .env file
 BACKEND_BASE = (os.getenv("BACKEND_BASE") or os.getenv("SERVER_URL") or "").rstrip("/")
 WS_URL       = os.getenv("WS_URL") or (BACKEND_BASE.replace("https://","wss://").replace("http://","ws://") + "/ws")
 
