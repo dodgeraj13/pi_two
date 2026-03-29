@@ -1,7 +1,26 @@
-import numpy as np, requests, math, time, threading, os
+import numpy as np, requests, math, time, threading, os, sys
 from PIL import Image, ImageFont, ImageDraw
 from io import BytesIO
 from datetime import datetime
+
+# Add parent directory to path for clock_utils import
+sys.path.insert(0, "/home/pi_two")
+try:
+    from clock_utils import (
+        CLOCK_CENTER, CLOCK_RADIUS, NUM_TICKS,
+        RING_COLOR, TICK_COLOR, NUMBER_COLOR,
+        HOUR_HAND_COLOR, MINUTE_HAND_COLOR, CENTER_COLOR,
+        HOUR_HAND_LENGTH, MINUTE_HAND_LENGTH,
+        HOUR_HAND_WIDTH, MINUTE_HAND_WIDTH, CENTER_DOT_RADIUS,
+        polar_point, get_hand_angles
+    )
+    USE_CLOCK_UTILS = True
+except ImportError:
+    USE_CLOCK_UTILS = False
+    # Fallback local definition
+    def polar_point_local(cx, cy, r, deg):
+        a = math.radians(deg)
+        return (cx + int(round(r * math.cos(a))), cy + int(round(r * math.sin(a))))
 
 class SpotifyScreen:
     def __init__(self, config, modules, fullscreen):
@@ -119,27 +138,28 @@ class SpotifyScreen:
         return (cx + int(round(r * math.cos(a))), cy + int(round(r * math.sin(a))))
 
     def generateAnalogClockFrame(self):
-        """Generate an analog clock frame for idle fallback"""
+        """Generate an analog clock frame for idle fallback using shared constants"""
         frame = Image.new("RGB", (self.canvas_width, self.canvas_height), (0, 0, 0))
         draw = ImageDraw.Draw(frame)
 
-        cx, cy = 32, 32  # Center of 64x64 canvas
-        radius = 30
+        # Use shared constants if available, otherwise fallback
+        cx, cy = CLOCK_CENTER if USE_CLOCK_UTILS else (32, 32)
+        radius = CLOCK_RADIUS if USE_CLOCK_UTILS else 30
 
         # Draw outer ring
-        ring_color = (220, 230, 255)
-        tick_color = (180, 190, 210)
+        ring_color = RING_COLOR if USE_CLOCK_UTILS else (220, 230, 255)
+        tick_color = TICK_COLOR if USE_CLOCK_UTILS else (102, 102, 102)
         draw.ellipse([cx - radius, cy - radius, cx + radius, cy + radius], outline=ring_color, width=1)
 
-        # Draw tick marks
-        for m in range(60):
-            ang = m * 6
-            r1 = radius - 3 if m % 5 == 0 else radius - 1
+        # Draw tick marks (12 hourly marks)
+        num_ticks = NUM_TICKS if USE_CLOCK_UTILS else 12
+        for i in range(num_ticks):
+            ang = i * 30
+            r1 = radius - 5
             r2 = radius
-            x1, y1 = self.polar_point(cx, cy, r1, ang - 90)
-            x2, y2 = self.polar_point(cx, cy, r2, ang - 90)
-            c = ring_color if m % 5 == 0 else tick_color
-            draw.line((x1, y1, x2, y2), fill=c)
+            x1, y1 = polar_point(cx, cy, r1, ang - 90) if USE_CLOCK_UTILS else self.polar_point(cx, cy, r1, ang - 90)
+            x2, y2 = polar_point(cx, cy, r2, ang - 90) if USE_CLOCK_UTILS else self.polar_point(cx, cy, r2, ang - 90)
+            draw.line((x1, y1, x2, y2), fill=tick_color)
 
         # Draw hour numbers (12, 3, 6, 9)
         try:
@@ -147,41 +167,49 @@ class SpotifyScreen:
         except:
             num_font = self.font
 
-        white = (220, 230, 255)
-        # 12 at top
-        draw.text((cx - 4, 6), "12", fill=white, font=num_font)
-        # 3 at right
-        draw.text((cx + radius - 6, cy - 3), "3", fill=white, font=num_font)
-        # 6 at bottom
-        draw.text((cx - 2, cy + radius - 8), "6", fill=white, font=num_font)
-        # 9 at left
-        draw.text((cx - radius + 1, cy - 3), "9", fill=white, font=num_font)
+        num_color = NUMBER_COLOR if USE_CLOCK_UTILS else (204, 204, 204)
+        num_offset = radius - 12
 
-        # Draw hands
+        # 12 at top
+        draw.text((cx - 4, cx - num_offset - 2), "12", fill=num_color, font=num_font)
+        # 3 at right
+        draw.text((cx + num_offset - 2, cy - 3), "3", fill=num_color, font=num_font)
+        # 6 at bottom
+        draw.text((cx - 2, cy + num_offset - 6), "6", fill=num_color, font=num_font)
+        # 9 at left
+        draw.text((cx - num_offset, cy - 3), "9", fill=num_color, font=num_font)
+
+        # Draw hands (no seconds hand)
         now = datetime.now()
         hour = now.hour % 12
         minute = now.minute
 
-        hour_color = (255, 210, 120)
-        minute_color = (120, 200, 255)
-        center_color = (255, 255, 255)
+        hour_color = HOUR_HAND_COLOR if USE_CLOCK_UTILS else (255, 215, 140)
+        minute_color = MINUTE_HAND_COLOR if USE_CLOCK_UTILS else (120, 200, 255)
+        center_color = CENTER_COLOR if USE_CLOCK_UTILS else (255, 255, 255)
 
         # Calculate angles
-        minute_angle = (minute % 60) * 6 - 90
-        hour_angle = ((hour % 12) + minute / 60.0) * 30 - 90
+        if USE_CLOCK_UTILS:
+            hour_angle, minute_angle = get_hand_angles(hour, minute)
+        else:
+            minute_angle = (minute % 60) * 6 - 90
+            hour_angle = ((hour % 12) + minute / 60.0) * 30 - 90
+
+        # Hand lengths
+        min_len = MINUTE_HAND_LENGTH if USE_CLOCK_UTILS else 26
+        hr_len = HOUR_HAND_LENGTH if USE_CLOCK_UTILS else 18
 
         # Minute hand (longer)
-        min_len = 26
-        mx, my = self.polar_point(cx, cy, min_len, minute_angle)
-        draw.line((cx, cy, mx, my), fill=minute_color, width=2)
+        mx, my = polar_point(cx, cy, min_len, minute_angle) if USE_CLOCK_UTILS else self.polar_point(cx, cy, min_len, minute_angle)
+        draw.line((cx, cy, mx, my), fill=minute_color, width=MINUTE_HAND_WIDTH if USE_CLOCK_UTILS else 2)
 
-        # Hour hand (shorter)
-        hr_len = 18
-        hx, hy = self.polar_point(cx, cy, hr_len, hour_angle)
-        draw.line((cx, cy, hx, hy), fill=hour_color, width=3)
+        # Hour hand (shorter, thicker)
+        hx, hy = polar_point(cx, cy, hr_len, hour_angle) if USE_CLOCK_UTILS else self.polar_point(cx, cy, hr_len, hour_angle)
+        draw.line((cx, cy, hx, hy), fill=hour_color, width=HOUR_HAND_WIDTH if USE_CLOCK_UTILS else 3)
 
-        # Center cap
-        draw.ellipse([cx - 1, cy - 1, cx + 1, cy + 1], fill=center_color)
+        # Center dot
+        dot_r = CENTER_DOT_RADIUS if USE_CLOCK_UTILS else 2
+        draw.ellipse([cx - dot_r, cy - dot_r, cx + dot_r, cy + dot_r], fill=center_color)
 
         return frame
 
