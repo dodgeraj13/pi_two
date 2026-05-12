@@ -189,9 +189,22 @@ class Runner:
         try:
             print("[agent] starting Weather ...", flush=True)
             os.chdir(WEATHER_DIR)
+            # sudo strips the environment, so pass secrets explicitly via /usr/bin/env
+            weather_api_key = os.getenv("WEATHER_API_KEY", "")
+            explicit_env = [
+                f"HOME={HOME_DIR}",
+                f"XDG_CACHE_HOME={HOME_DIR}/.cache",
+                "PYTHONUNBUFFERED=1",
+            ]
+            if weather_api_key:
+                explicit_env.append(f"WEATHER_API_KEY={weather_api_key}")
+            if self.location:
+                explicit_env.append(f"WEATHER_LOCATION={self.location}")
+            if self.units:
+                explicit_env.append(f"WEATHER_UNITS={self.units}")
             cmd = [
                 "sudo","-n","/usr/bin/env",
-                f"HOME={HOME_DIR}",f"XDG_CACHE_HOME={HOME_DIR}/.cache","PYTHONUNBUFFERED=1",
+                *explicit_env,
                 os.path.join(BASE, ".venv", "bin", "python"),
                 os.path.join(WEATHER_DIR, "weather_display.py"),
                 "--hardware-mapping","adafruit-hat-pwm",
@@ -384,19 +397,22 @@ def fetch_and_write_mlb_config(runner: "Runner | None" = None):
             return
         data = r.json()
 
-        # Write config.json — patch weather block with device location + API key
+        # Write config.json — optionally patch weather block with device location + API key
         config = data.get("config") or {}
         if config:
             weather_api_key = os.getenv("WEATHER_API_KEY", "")
             location = (runner.location if runner else "") or os.getenv("WEATHER_LOCATION", "")
             units = (runner.units if runner else "imperial") or "imperial"
-            if "weather" not in config or not isinstance(config["weather"], dict):
-                config["weather"] = {}
-            if weather_api_key:
-                config["weather"]["apikey"] = weather_api_key
-            if location:
-                config["weather"]["location"] = location
-            config["weather"]["metric_units"] = (units == "metric")
+            # Only touch the weather block if we actually have something to write.
+            # Never create an empty weather block — that gives pyowm "Nothing to geocode".
+            if weather_api_key or location:
+                if "weather" not in config or not isinstance(config["weather"], dict):
+                    config["weather"] = {}
+                if weather_api_key:
+                    config["weather"]["apikey"] = weather_api_key
+                if location:
+                    config["weather"]["location"] = location
+                    config["weather"]["metric_units"] = (units == "metric")
             config_path = os.path.join(MLB_DIR, "config.json")
             with open(config_path, "w") as f:
                 json.dump(config, f, indent="\t")
