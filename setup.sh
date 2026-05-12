@@ -205,7 +205,7 @@ echo "n" | bash install.sh --skip-python --skip-matrix --skip-config 2>&1 | sed 
 # (the shebang on main.py points at this venv's python)
 MLB_VENV="$REPO_DIR/mlb-led-scoreboard/venv"
 if [[ -f "$MLB_VENV/bin/pip" ]]; then
-    "$MLB_VENV/bin/pip" install --quiet "$RGBMATRIX_WHL"
+    sudo "$MLB_VENV/bin/pip" install --quiet "$RGBMATRIX_WHL"
     ok "rgbmatrix installed into MLB venv"
 else
     warn "MLB venv not found at $MLB_VENV — MLB may fail to import rgbmatrix"
