@@ -16,14 +16,15 @@ BACKEND_BASE = (os.getenv("BACKEND_BASE") or os.getenv("SERVER_URL") or "").rstr
 _ws_base     = os.getenv("WS_URL") or (BACKEND_BASE.replace("https://","wss://").replace("http://","ws://") + "/ws")
 WS_URL       = f"{_ws_base}?device={DEVICE_TOKEN}" if DEVICE_TOKEN and "?device=" not in _ws_base else _ws_base
 
-MLB_DIR      = os.getenv("MLB_DIR", "/home/pi_two/mlb-led-scoreboard")
-MUSIC_DIR    = os.getenv("MUSIC_DIR", "/home/pi_two/rpi-spotify-matrix-display")
+HOME_DIR     = os.getenv("HOME_DIR", f"/home/{os.getenv('USER', 'pi_two')}")
+MLB_DIR      = os.getenv("MLB_DIR",     f"{HOME_DIR}/mlb-led-scoreboard")
+MUSIC_DIR    = os.getenv("MUSIC_DIR",   f"{HOME_DIR}/rpi-spotify-matrix-display")
 MUSIC_IMPL   = os.path.join(MUSIC_DIR, "impl")
-CLOCK_DIR    = os.getenv("CLOCK_DIR", "/home/pi_two/matrix-clock")
-WEATHER_DIR  = os.getenv("WEATHER_DIR", "/home/pi_two/matrix-weather")
-PICTURE_DIR  = os.getenv("PICTURE_DIR", "/home/pi_two/matrix-picture")
-DRAWING_DIR  = os.getenv("DRAWING_DIR", "/home/pi_two/matrix-drawing")
-TEXT_DIR     = os.getenv("TEXT_DIR", "/home/pi_two/matrix-text")
+CLOCK_DIR    = os.getenv("CLOCK_DIR",   f"{HOME_DIR}/matrix-clock")
+WEATHER_DIR  = os.getenv("WEATHER_DIR", f"{HOME_DIR}/matrix-weather")
+PICTURE_DIR  = os.getenv("PICTURE_DIR", f"{HOME_DIR}/matrix-picture")
+DRAWING_DIR  = os.getenv("DRAWING_DIR", f"{HOME_DIR}/matrix-drawing")
+TEXT_DIR     = os.getenv("TEXT_DIR",    f"{HOME_DIR}/matrix-text")
 
 HEADERS = {}
 if DEVICE_TOKEN:
@@ -75,11 +76,9 @@ class Runner:
 
     def _child_env(self):
         # unbuffered logs; stable HOME/CACHE
-        env_home = "/home/pi_two"
-        env_cache = "/home/pi_two/.cache"
         env = os.environ.copy()
-        env["HOME"] = env_home
-        env["XDG_CACHE_HOME"] = env_cache
+        env["HOME"] = HOME_DIR
+        env["XDG_CACHE_HOME"] = f"{HOME_DIR}/.cache"
         env["PYTHONUNBUFFERED"] = "1"
         return env
 
@@ -147,7 +146,7 @@ class Runner:
             if not os.path.exists(py):
                 py = sys.executable
             cmd = [
-                "sudo","-n","env", f"HOME=/home/pi_two", f"XDG_CACHE_HOME=/home/pi_two/.cache",
+                "sudo","-n","env", f"HOME={HOME_DIR}", f"XDG_CACHE_HOME={HOME_DIR}/.cache","PYTHONUNBUFFERED=1",
                 py, "controller_v3.py"
             ]
             self.music_proc = subprocess.Popen(cmd, start_new_session=True, env=self._child_env())
@@ -162,7 +161,7 @@ class Runner:
             os.chdir(CLOCK_DIR)
             cmd = [
                 "sudo","-n","/usr/bin/env",
-                "HOME=/home/pi_two","XDG_CACHE_HOME=/home/pi_two/.cache","PYTHONUNBUFFERED=1",
+                f"HOME={HOME_DIR}",f"XDG_CACHE_HOME={HOME_DIR}/.cache","PYTHONUNBUFFERED=1",
                 os.path.join(BASE, ".venv", "bin", "python"),
                 os.path.join(CLOCK_DIR, "clock_display.py"),
                 "--hardware-mapping","adafruit-hat-pwm",
@@ -182,7 +181,7 @@ class Runner:
             os.chdir(WEATHER_DIR)
             cmd = [
                 "sudo","-n","/usr/bin/env",
-                "HOME=/home/pi_two","XDG_CACHE_HOME=/home/pi_two/.cache","PYTHONUNBUFFERED=1",
+                f"HOME={HOME_DIR}",f"XDG_CACHE_HOME={HOME_DIR}/.cache","PYTHONUNBUFFERED=1",
                 os.path.join(BASE, ".venv", "bin", "python"),
                 os.path.join(WEATHER_DIR, "weather_display.py"),
                 "--hardware-mapping","adafruit-hat-pwm",
@@ -202,7 +201,7 @@ class Runner:
             os.chdir(PICTURE_DIR if os.path.exists(PICTURE_DIR) else BASE)
             cmd = [
                 "sudo","-n","/usr/bin/env",
-                "HOME=/home/pi_two","XDG_CACHE_HOME=/home/pi_two/.cache","PYTHONUNBUFFERED=1",
+                f"HOME={HOME_DIR}",f"XDG_CACHE_HOME={HOME_DIR}/.cache","PYTHONUNBUFFERED=1",
                 os.path.join(BASE, ".venv", "bin", "python"),
                 os.path.join(PICTURE_DIR, "picture.py"),
                 "--api-base", BACKEND_BASE,
@@ -224,7 +223,7 @@ class Runner:
             os.chdir(DRAWING_DIR if os.path.exists(DRAWING_DIR) else BASE)
             cmd = [
                 "sudo","-n","/usr/bin/env",
-                "HOME=/home/pi_two","XDG_CACHE_HOME=/home/pi_two/.cache","PYTHONUNBUFFERED=1",
+                f"HOME={HOME_DIR}",f"XDG_CACHE_HOME={HOME_DIR}/.cache","PYTHONUNBUFFERED=1",
                 os.path.join(BASE, ".venv", "bin", "python"),
                 os.path.join(DRAWING_DIR, "drawing_display.py"),
                 "--api-base", BACKEND_BASE,
@@ -246,7 +245,7 @@ class Runner:
             os.chdir(TEXT_DIR if os.path.exists(TEXT_DIR) else BASE)
             cmd = [
                 "sudo","-n","/usr/bin/env",
-                "HOME=/home/pi_two","XDG_CACHE_HOME=/home/pi_two/.cache","PYTHONUNBUFFERED=1",
+                f"HOME={HOME_DIR}",f"XDG_CACHE_HOME={HOME_DIR}/.cache","PYTHONUNBUFFERED=1",
                 os.path.join(BASE, ".venv", "bin", "python"),
                 os.path.join(TEXT_DIR, "text_display.py"),
                 "--api-base", BACKEND_BASE,
