@@ -113,11 +113,7 @@ else
     ok "Repo cloned to $REPO_DIR"
 fi
 
-# Init submodules (rpi-rgb-led-matrix inside rpi-spotify-matrix-display)
-info "Initialising git submodules..."
-git -C "$REPO_DIR/rpi-spotify-matrix-display" submodule update --init --recursive 2>/dev/null || \
-    git -C "$REPO_DIR" submodule update --init --recursive
-ok "Submodules initialised"
+# rpi-rgb-led-matrix is cloned directly in the "Build bindings" section below
 
 # ── Handle /home/pi_two symlink for non-pi_two users ─────────────
 if [[ "$WHOAMI" != "pi_two" ]]; then
