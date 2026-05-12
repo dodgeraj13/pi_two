@@ -80,8 +80,9 @@ if [[ "$HTTP_CODE" != "200" && "$HTTP_CODE" != "201" ]]; then
     die "Backend returned $HTTP_CODE: $HTTP_BODY"
 fi
 
-DEVICE_TOKEN=$(echo "$HTTP_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])" 2>/dev/null) \
+DEVICE_TOKEN=$(echo "$HTTP_BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('token') or d.get('device_token'))" 2>/dev/null) \
     || die "Could not parse token from response: $HTTP_BODY"
+[[ -z "$DEVICE_TOKEN" || "$DEVICE_TOKEN" == "None" ]] && die "Could not parse token from response: $HTTP_BODY"
 
 ok "Device token: $DEVICE_TOKEN"
 
