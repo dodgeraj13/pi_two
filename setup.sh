@@ -147,27 +147,45 @@ python3 -m venv .venv
 .venv/bin/pip install --quiet requests websockets python-dotenv pillow
 ok "Agent venv ready at $REPO_DIR/matrix-agent/.venv"
 
-# ── MLB Scoreboard (also builds rpi-rgb-led-matrix) ──────────────
-section "MLB scoreboard setup (+ matrix driver build)"
+# ── Build rpi-rgb-led-matrix Python bindings ─────────────────────
+section "Building rpi-rgb-led-matrix LED driver"
 
-cd "$REPO_DIR/mlb-led-scoreboard"
-info "Running MLB install.sh — this builds the LED matrix driver and may take a few minutes..."
-# --skip-python: we already installed apt packages above
-# --skip-config: non-interactive, no config validation question
-echo "n" | bash install.sh --skip-python --skip-config 2>&1 | sed 's/^/  [mlb] /'
-ok "MLB scoreboard ready"
-
-# Point the Spotify display's rpi-rgb-led-matrix at the just-built MLB copy
-# so clock/weather/picture/drawing/text can find the compiled bindings via _add_path()
-MLB_MATRIX="$REPO_DIR/mlb-led-scoreboard/submodules/matrix"
-SPOTIFY_MATRIX="$REPO_DIR/rpi-spotify-matrix-display/rpi-rgb-led-matrix"
-if [[ -d "$MLB_MATRIX/bindings" ]]; then
-    rm -rf "$SPOTIFY_MATRIX"
-    ln -sfn "$MLB_MATRIX" "$SPOTIFY_MATRIX"
-    ok "rpi-rgb-led-matrix bindings linked: $SPOTIFY_MATRIX → $MLB_MATRIX"
+MATRIX_SRC="$HOME_DIR/rpi-rgb-led-matrix"
+if [[ -d "$MATRIX_SRC/.git" ]]; then
+    info "rpi-rgb-led-matrix already cloned — resetting to master..."
+    git -C "$MATRIX_SRC" fetch origin
+    git -C "$MATRIX_SRC" reset --hard origin/master
 else
-    warn "MLB matrix submodule not found at $MLB_MATRIX — display modes may not work"
+    git clone https://github.com/hzeller/rpi-rgb-led-matrix.git "$MATRIX_SRC"
 fi
+
+info "Compiling library + Python bindings (this takes a few minutes)..."
+cd "$MATRIX_SRC"
+make build-python PYTHON=python3 CYTHON=cython3
+sudo make install-python PYTHON=python3
+ok "rpi-rgb-led-matrix built and installed"
+
+# Symlink so Spotify display and display scripts (_add_path) can find the bindings
+SPOTIFY_MATRIX="$REPO_DIR/rpi-spotify-matrix-display/rpi-rgb-led-matrix"
+ln -sfn "$MATRIX_SRC" "$SPOTIFY_MATRIX"
+ok "rpi-rgb-led-matrix symlinked for Spotify display: $SPOTIFY_MATRIX → $MATRIX_SRC"
+
+# Also symlink into mlb-led-scoreboard/submodules so MLB's own import path still works
+mkdir -p "$REPO_DIR/mlb-led-scoreboard/submodules"
+ln -sfn "$MATRIX_SRC" "$REPO_DIR/mlb-led-scoreboard/submodules/matrix"
+ok "rpi-rgb-led-matrix symlinked for MLB scoreboard"
+
+# ── MLB Scoreboard setup ──────────────────────────────────────────
+section "MLB scoreboard setup"
+
+mkdir -p "$REPO_DIR/mlb-led-scoreboard/logs"   # install.sh opens logs/mlbled.log at startup
+cd "$REPO_DIR/mlb-led-scoreboard"
+info "Running MLB install.sh (matrix driver already built above)..."
+# --skip-python: apt packages installed above
+# --skip-matrix: we built rpi-rgb-led-matrix ourselves above
+# --skip-config: non-interactive
+echo "n" | bash install.sh --skip-python --skip-matrix --skip-config 2>&1 | sed 's/^/  [mlb] /'
+ok "MLB scoreboard ready"
 
 # Blacklist snd_bcm2835 (conflicts with hardware PWM)
 if [[ ! -f /etc/modprobe.d/blacklist-rgbmatrix.conf ]]; then
