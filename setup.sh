@@ -150,7 +150,14 @@ if [[ ! -d "$MATRIX_SRC" ]]; then
 fi
 
 cd "$MATRIX_SRC/bindings/python"
-sudo python3 setup.py build_ext --inplace 2>&1 | tail -5
+# Modern rpi-rgb-led-matrix uses a Makefile in bindings/python
+if [[ -f Makefile ]]; then
+    sudo make build PYTHON="$(which python3)" 2>&1 | tail -5
+elif [[ -f setup.py ]]; then
+    sudo python3 setup.py build_ext --inplace 2>&1 | tail -5
+else
+    die "Cannot find build system in $MATRIX_SRC/bindings/python (no Makefile or setup.py)"
+fi
 ok "rpi-rgb-led-matrix bindings built"
 
 # Blacklist snd_bcm2835 (conflicts with hardware PWM)
