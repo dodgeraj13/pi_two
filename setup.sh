@@ -93,7 +93,7 @@ sudo apt-get update -y
 sudo apt-get upgrade -y
 sudo apt-get install -y \
     git python3-dev python3-pip python3-venv python3-pillow \
-    make gcc g++ cython3 \
+    make gcc g++ cython3 cmake \
     libxml2-dev libxslt-dev libopenjp2-7 \
     libsdl2-dev libsdl2-image-2.0-0 libsdl2-mixer-2.0-0 libsdl2-ttf-2.0-0 \
     libatlas-base-dev libfreetype6-dev \
@@ -138,17 +138,12 @@ for APP in rpi-spotify-matrix-display mlb-led-scoreboard \
     fi
 done
 
-# ── Agent venv (used by clock, weather, picture, drawing, text) ──
-section "Agent Python venv"
-
-cd "$REPO_DIR/matrix-agent"
-python3 -m venv .venv
-.venv/bin/pip install --upgrade pip --quiet
-.venv/bin/pip install --quiet requests websockets python-dotenv pillow
-ok "Agent venv ready at $REPO_DIR/matrix-agent/.venv"
-
-# ── Build rpi-rgb-led-matrix Python bindings ─────────────────────
+# ── Build rpi-rgb-led-matrix (new pip/cmake build system) ────────
 section "Building rpi-rgb-led-matrix LED driver"
+
+# The hzeller/rpi-rgb-led-matrix repo now uses scikit-build-core + cmake
+# (the old 'make build-python' target no longer exists on master).
+# Strategy: build a wheel once, then install it into every venv that needs it.
 
 MATRIX_SRC="$HOME_DIR/rpi-rgb-led-matrix"
 if [[ -d "$MATRIX_SRC/.git" ]]; then
@@ -159,32 +154,57 @@ else
     git clone https://github.com/hzeller/rpi-rgb-led-matrix.git "$MATRIX_SRC"
 fi
 
-info "Compiling library + Python bindings (this takes a few minutes)..."
-cd "$MATRIX_SRC"
-make build-python PYTHON=python3 CYTHON=cython3
-sudo make install-python PYTHON=python3
-ok "rpi-rgb-led-matrix built and installed"
+info "Building rgbmatrix wheel (takes a few minutes — cmake + Cython compile)..."
+WHEEL_DIR="/tmp/rgbmatrix-wheel"
+rm -rf "$WHEEL_DIR"
+pip3 wheel "$MATRIX_SRC" --no-deps -w "$WHEEL_DIR" 2>&1 | sed 's/^/  [wheel] /'
+RGBMATRIX_WHL=$(ls "$WHEEL_DIR"/rgbmatrix*.whl 2>/dev/null | head -1)
+[[ -z "$RGBMATRIX_WHL" ]] && die "Failed to build rgbmatrix wheel — check errors above"
 
-# Symlink so Spotify display and display scripts (_add_path) can find the bindings
+# Install system-wide: MLB's main.py runs as sudo python3 (not in a venv)
+sudo pip3 install "$RGBMATRIX_WHL" --break-system-packages --force-reinstall --quiet
+ok "rgbmatrix installed system-wide"
+
+# Symlink the full matrix repo so display scripts can find fonts at:
+#   rpi-spotify-matrix-display/rpi-rgb-led-matrix/fonts
 SPOTIFY_MATRIX="$REPO_DIR/rpi-spotify-matrix-display/rpi-rgb-led-matrix"
 ln -sfn "$MATRIX_SRC" "$SPOTIFY_MATRIX"
-ok "rpi-rgb-led-matrix symlinked for Spotify display: $SPOTIFY_MATRIX → $MATRIX_SRC"
+ok "rpi-rgb-led-matrix repo linked: $SPOTIFY_MATRIX → $MATRIX_SRC"
 
-# Also symlink into mlb-led-scoreboard/submodules so MLB's own import path still works
 mkdir -p "$REPO_DIR/mlb-led-scoreboard/submodules"
 ln -sfn "$MATRIX_SRC" "$REPO_DIR/mlb-led-scoreboard/submodules/matrix"
-ok "rpi-rgb-led-matrix symlinked for MLB scoreboard"
+ok "rpi-rgb-led-matrix repo linked for MLB"
+
+# ── Agent venv (clock, weather, picture, drawing, text) ──────────
+section "Agent Python venv"
+
+cd "$REPO_DIR/matrix-agent"
+python3 -m venv .venv
+.venv/bin/pip install --upgrade pip --quiet
+.venv/bin/pip install --quiet requests websockets python-dotenv pillow
+.venv/bin/pip install --quiet "$RGBMATRIX_WHL"
+ok "Agent venv ready at $REPO_DIR/matrix-agent/.venv"
 
 # ── MLB Scoreboard setup ──────────────────────────────────────────
 section "MLB scoreboard setup"
 
 mkdir -p "$REPO_DIR/mlb-led-scoreboard/logs"   # install.sh opens logs/mlbled.log at startup
 cd "$REPO_DIR/mlb-led-scoreboard"
-info "Running MLB install.sh (matrix driver already built above)..."
+info "Running MLB install.sh (skipping matrix — already installed above)..."
 # --skip-python: apt packages installed above
-# --skip-matrix: we built rpi-rgb-led-matrix ourselves above
+# --skip-matrix: rgbmatrix already installed via pip above
 # --skip-config: non-interactive
 echo "n" | bash install.sh --skip-python --skip-matrix --skip-config 2>&1 | sed 's/^/  [mlb] /'
+
+# install.sh creates mlb-led-scoreboard/venv — put rgbmatrix in there too
+# (the shebang on main.py points at this venv's python)
+MLB_VENV="$REPO_DIR/mlb-led-scoreboard/venv"
+if [[ -f "$MLB_VENV/bin/pip" ]]; then
+    "$MLB_VENV/bin/pip" install --quiet "$RGBMATRIX_WHL"
+    ok "rgbmatrix installed into MLB venv"
+else
+    warn "MLB venv not found at $MLB_VENV — MLB may fail to import rgbmatrix"
+fi
 ok "MLB scoreboard ready"
 
 # Blacklist snd_bcm2835 (conflicts with hardware PWM)
@@ -210,6 +230,7 @@ cd "$REPO_DIR/rpi-spotify-matrix-display"
 python3 -m venv .venv
 .venv/bin/pip install --upgrade pip --quiet
 .venv/bin/pip install --quiet -r requirements.txt
+.venv/bin/pip install --quiet "$RGBMATRIX_WHL"
 ok "Spotify display venv ready"
 
 # ── Write config files ────────────────────────────────────────────
