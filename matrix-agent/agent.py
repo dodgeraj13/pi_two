@@ -105,6 +105,14 @@ class Runner:
         else:
             if cfg.has_option("Matrix", "pixel_mapper_config"):
                 cfg.remove_option("Matrix", "pixel_mapper_config")
+        # Inject device token so spotify_module sends X-Device-Token
+        if DEVICE_TOKEN:
+            if not cfg.has_section("Spotify"):
+                cfg.add_section("Spotify")
+            cfg.set("Spotify", "device_token", DEVICE_TOKEN)
+            cfg.set("Spotify", "use_backend", "true")
+            if BACKEND_BASE and not cfg.has_option("Spotify", "backend_url"):
+                cfg.set("Spotify", "backend_url", BACKEND_BASE)
         with open(ini_path, "w") as f:
             cfg.write(f)
 

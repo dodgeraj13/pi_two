@@ -37,8 +37,19 @@ class SpotifyModule:
         else:
             self.backend_url = os.environ.get('BACKEND_URL', 'https://matrix-backend-lv4k.onrender.com')
 
+        # Per-device token for multi-device backend
+        self.device_token = ''
+        if config is not None and 'Spotify' in config and 'device_token' in config['Spotify']:
+            self.device_token = config['Spotify']['device_token']
+        if not self.device_token:
+            self.device_token = os.environ.get('DEVICE_TOKEN', '')
+
         print(f"[Spotify Module] Backend mode initialized")
         print(f"[Spotify Module] Backend URL: {self.backend_url}")
+        if self.device_token:
+            print(f"[Spotify Module] Device token: {self.device_token[:8]}...")
+        else:
+            print(f"[Spotify Module] WARNING: No device token set — backend requests may fail")
         self._mode = 'backend'
 
     def _init_local_mode(self, config):
@@ -179,8 +190,12 @@ class SpotifyModule:
         self.last_check = current_time
 
         try:
+            headers = {}
+            if self.device_token:
+                headers["X-Device-Token"] = self.device_token
             response = requests.get(
                 f"{self.backend_url}/now-playing",
+                headers=headers,
                 timeout=5
             )
 
