@@ -119,6 +119,7 @@ class Runner:
     def _start_mlb(self):
         if self._is_running(self.mlb_proc): return
         try:
+            fetch_and_write_mlb_config()
             print("[agent] starting MLB ...", flush=True)
             os.chdir(MLB_DIR)
             cmd = [
@@ -320,6 +321,38 @@ class Runner:
     def restart_current(self):
         # helper: restart current mode (used by watchdog)
         self.apply_mode(self.mode)
+
+def fetch_and_write_mlb_config():
+    """Fetch MLB config from backend and write to local config files."""
+    if not BACKEND_BASE or not HEADERS:
+        return
+    try:
+        r = requests.get(f"{BACKEND_BASE}/mlb-config", headers=HEADERS, timeout=5)
+        if not r.ok:
+            print(f"[agent] MLB config fetch failed: {r.status_code}", flush=True)
+            return
+        data = r.json()
+
+        # Write config.json
+        config = data.get("config")
+        if config:
+            config_path = os.path.join(MLB_DIR, "config.json")
+            with open(config_path, "w") as f:
+                json.dump(config, f, indent="\t")
+            print("[agent] MLB config.json written", flush=True)
+
+        # Write colors/scoreboard.json
+        sb_colors = data.get("scoreboard_colors")
+        if sb_colors:
+            colors_dir = os.path.join(MLB_DIR, "colors")
+            os.makedirs(colors_dir, exist_ok=True)
+            with open(os.path.join(colors_dir, "scoreboard.json"), "w") as f:
+                json.dump(sb_colors, f, indent=2)
+            print("[agent] MLB scoreboard colors written", flush=True)
+
+    except Exception as e:
+        print(f"[agent] MLB config fetch error: {e}", flush=True)
+
 
 def fetch_state():
     try:
