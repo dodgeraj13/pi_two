@@ -138,27 +138,36 @@ for APP in rpi-spotify-matrix-display mlb-led-scoreboard \
     fi
 done
 
-# ── Build rpi-rgb-led-matrix bindings ────────────────────────────
-#  Used by clock/weather/picture/drawing/text via _add_path()
-section "Building rpi-rgb-led-matrix Python bindings"
+# ── Agent venv (used by clock, weather, picture, drawing, text) ──
+section "Agent Python venv"
 
-MATRIX_SRC="$REPO_DIR/rpi-spotify-matrix-display/rpi-rgb-led-matrix"
+cd "$REPO_DIR/matrix-agent"
+python3 -m venv .venv
+.venv/bin/pip install --upgrade pip --quiet
+.venv/bin/pip install --quiet requests websockets python-dotenv pillow
+ok "Agent venv ready at $REPO_DIR/matrix-agent/.venv"
 
-if [[ ! -d "$MATRIX_SRC" ]]; then
-    info "Submodule empty – cloning rpi-rgb-led-matrix separately..."
-    git clone https://github.com/hzeller/rpi-rgb-led-matrix.git "$MATRIX_SRC"
-fi
+# ── MLB Scoreboard (also builds rpi-rgb-led-matrix) ──────────────
+section "MLB scoreboard setup (+ matrix driver build)"
 
-cd "$MATRIX_SRC/bindings/python"
-# Modern rpi-rgb-led-matrix uses a Makefile in bindings/python
-if [[ -f Makefile ]]; then
-    sudo make build PYTHON="$(which python3)" 2>&1 | tail -5
-elif [[ -f setup.py ]]; then
-    sudo python3 setup.py build_ext --inplace 2>&1 | tail -5
+cd "$REPO_DIR/mlb-led-scoreboard"
+info "Running MLB install.sh — this builds the LED matrix driver and may take a few minutes..."
+# --skip-python: we already installed apt packages above
+# --skip-config: non-interactive, no config validation question
+echo "n" | bash install.sh --skip-python --skip-config 2>&1 | sed 's/^/  [mlb] /'
+ok "MLB scoreboard ready"
+
+# Point the Spotify display's rpi-rgb-led-matrix at the just-built MLB copy
+# so clock/weather/picture/drawing/text can find the compiled bindings via _add_path()
+MLB_MATRIX="$REPO_DIR/mlb-led-scoreboard/submodules/matrix"
+SPOTIFY_MATRIX="$REPO_DIR/rpi-spotify-matrix-display/rpi-rgb-led-matrix"
+if [[ -d "$MLB_MATRIX/bindings" ]]; then
+    rm -rf "$SPOTIFY_MATRIX"
+    ln -sfn "$MLB_MATRIX" "$SPOTIFY_MATRIX"
+    ok "rpi-rgb-led-matrix bindings linked: $SPOTIFY_MATRIX → $MLB_MATRIX"
 else
-    die "Cannot find build system in $MATRIX_SRC/bindings/python (no Makefile or setup.py)"
+    warn "MLB matrix submodule not found at $MLB_MATRIX — display modes may not work"
 fi
-ok "rpi-rgb-led-matrix bindings built"
 
 # Blacklist snd_bcm2835 (conflicts with hardware PWM)
 if [[ ! -f /etc/modprobe.d/blacklist-rgbmatrix.conf ]]; then
@@ -175,24 +184,6 @@ if [[ -n "$CMDLINE_FILE" ]] && ! grep -q "isolcpus=3" "$CMDLINE_FILE"; then
     sudo sed -i '$ s/$/ isolcpus=3/' "$CMDLINE_FILE"
     ok "Added isolcpus=3 to $CMDLINE_FILE"
 fi
-
-# ── Agent venv (used by clock, weather, picture, drawing, text) ──
-section "Agent Python venv"
-
-cd "$REPO_DIR/matrix-agent"
-python3 -m venv .venv
-.venv/bin/pip install --upgrade pip --quiet
-.venv/bin/pip install --quiet requests websockets python-dotenv pillow
-ok "Agent venv ready at $REPO_DIR/matrix-agent/.venv"
-
-# ── MLB Scoreboard venv ───────────────────────────────────────────
-section "MLB scoreboard setup"
-
-cd "$REPO_DIR/mlb-led-scoreboard"
-info "Running MLB install.sh (--skip-matrix, non-interactive)..."
-# Pass 'n' to skip the optional config update question
-echo "n" | bash install.sh --skip-matrix --skip-config 2>&1 | sed 's/^/  [mlb] /'
-ok "MLB scoreboard ready"
 
 # ── Spotify display venv ──────────────────────────────────────────
 section "Spotify display venv"
