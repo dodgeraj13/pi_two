@@ -149,8 +149,8 @@ if [[ ! -d "$MATRIX_SRC" ]]; then
     git clone https://github.com/hzeller/rpi-rgb-led-matrix.git "$MATRIX_SRC"
 fi
 
-cd "$MATRIX_SRC"
-make build-python PYTHON="$(which python3)" CYTHON=cython3
+cd "$MATRIX_SRC/bindings/python"
+sudo python3 setup.py build_ext --inplace 2>&1 | tail -5
 ok "rpi-rgb-led-matrix bindings built"
 
 # Blacklist snd_bcm2835 (conflicts with hardware PWM)
