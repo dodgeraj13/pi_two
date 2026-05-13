@@ -77,10 +77,11 @@ SCROLL_DELAY       = 0.05  # seconds per scroll tick
 SUBMODE_INTERVAL   = 9     # seconds before switching between Basic and Map View
 
 # ── APIs ──────────────────────────────────────────────────────────────────────
-NOMINATIM = "https://nominatim.openstreetmap.org/search"
-OSRM      = "http://router.project-osrm.org/route/v1/driving"
-OWM       = "https://api.openweathermap.org/data/2.5/weather"
-MAPBOX    = "https://api.mapbox.com/styles/v1/dodgeraj/cmp3i6t8p000g01shcf3a0sps/static"
+NOMINATIM         = "https://nominatim.openstreetmap.org/search"
+OSRM              = "http://router.project-osrm.org/route/v1/driving"
+OWM               = "https://api.openweathermap.org/data/2.5/weather"
+MAPBOX            = "https://api.mapbox.com/styles/v1/dodgeraj/cmp3i6t8p000g01shcf3a0sps/static"
+MAPBOX_DIRECTIONS = "https://api.mapbox.com/directions/v5/mapbox/driving-traffic"
 
 
 def geocode(address: str):
@@ -101,12 +102,45 @@ def geocode(address: str):
     return None
 
 
-def get_route(lat_a, lon_a, lat_b, lon_b):
-    """Return (duration_seconds, route_coords, speeds) or (None, None, None).
+_CONGESTION_COLOR = {
+    "low":      (30,  200, 100),   # green  — free flow
+    "moderate": (255, 200,   0),   # amber  — some traffic
+    "heavy":    (255, 100,   0),   # orange — heavy traffic
+    "severe":   (220,  50,  50),   # red    — standstill
+}
+_FREE_FLOW_COLOR = (30, 120, 255)  # blue   — unknown / no data
 
-    route_coords is a list of [lon, lat] pairs in GeoJSON order.
-    speeds is a list of m/s values — one per consecutive coord pair (len = len(coords)-1).
+
+def get_route(lat_a, lon_a, lat_b, lon_b):
+    """Return (duration_seconds, coords, seg_colors) or (None, None, []).
+
+    seg_colors is a list of (r,g,b) tuples — one per consecutive coord pair.
+
+    If MAPBOX_TOKEN is set, uses Mapbox Directions driving-traffic profile for
+    real-time congestion colours.  Falls back to OSRM + theoretical road speeds.
     """
+    if MAPBOX_TOKEN:
+        try:
+            url = (
+                f"{MAPBOX_DIRECTIONS}"
+                f"/{lon_a:.6f},{lat_a:.6f};{lon_b:.6f},{lat_b:.6f}"
+                f"?geometries=geojson&overview=full&annotations=congestion"
+                f"&access_token={MAPBOX_TOKEN}"
+            )
+            r = requests.get(url, timeout=15)
+            d = r.json()
+            if d.get("code") == "Ok":
+                route      = d["routes"][0]
+                dur        = route["duration"]
+                coords     = route["geometry"]["coordinates"]
+                congestion = route["legs"][0]["annotation"].get("congestion", [])
+                colors     = [_CONGESTION_COLOR.get(c, _FREE_FLOW_COLOR) for c in congestion]
+                print(f"[map] Mapbox directions OK — {len(coords)} pts, {len(colors)} segments", flush=True)
+                return dur, coords, colors
+        except Exception as e:
+            print(f"[map] Mapbox directions error (falling back to OSRM): {e}", flush=True)
+
+    # ── OSRM fallback ──────────────────────────────────────────────────────────
     try:
         url = (
             f"{OSRM}/{lon_a:.6f},{lat_a:.6f};{lon_b:.6f},{lat_b:.6f}"
@@ -117,15 +151,15 @@ def get_route(lat_a, lon_a, lat_b, lon_b):
         if d.get("code") == "Ok":
             route  = d["routes"][0]
             dur    = route["duration"]
-            coords = route["geometry"]["coordinates"]   # [[lon,lat], ...]
-            try:
-                speeds = route["legs"][0]["annotation"]["speed"]
-            except (KeyError, IndexError):
-                speeds = []
-            return dur, coords, speeds
+            coords = route["geometry"]["coordinates"]
+            speeds = route["legs"][0]["annotation"].get("speed", [])
+            colors = [speed_to_color(s) for s in speeds]
+            print(f"[map] OSRM OK — {len(coords)} pts, {len(colors)} segments", flush=True)
+            return dur, coords, colors
     except Exception as e:
-        print(f"[map] routing error: {e}", flush=True)
-    return None, None, None
+        print(f"[map] OSRM routing error: {e}", flush=True)
+
+    return None, None, []
 
 
 def get_weather(lat, lon, units="imperial"):
@@ -150,29 +184,28 @@ def get_weather(lat, lon, units="imperial"):
     return None
 
 
-def simplify_route(coords, speeds, max_points=60):
-    """Downsample coords to at most max_points; average speeds for each simplified segment.
+def simplify_route(coords, seg_colors, max_points=60):
+    """Downsample coords to at most max_points; pick representative color per segment.
 
-    Returns (simplified_coords, per_segment_speeds) where per_segment_speeds has
-    len(simplified_coords)-1 entries — one average m/s value per drawn segment.
+    Returns (simplified_coords, simplified_colors) where simplified_colors has
+    len(simplified_coords)-1 entries — one (r,g,b) tuple per drawn segment.
     """
     n = len(coords)
     if n <= max_points:
-        # speeds has n-1 entries; return as-is
-        return coords, speeds
+        return coords, seg_colors
 
-    step = n / max_points
+    step    = n / max_points
     sampled = [coords[int(i * step)] for i in range(max_points)]
     sampled.append(coords[-1])
 
-    seg_speeds = []
+    out_colors = []
     for i in range(len(sampled) - 1):
-        i1 = int(i * step)
-        i2 = min(int((i + 1) * step), len(speeds))
-        chunk = speeds[i1:i2] if speeds and i1 < i2 else []
-        seg_speeds.append(sum(chunk) / len(chunk) if chunk else 20.0)
+        # pick the color at the midpoint of this simplified segment's original span
+        mid = int((i + 0.5) * step)
+        mid = min(mid, len(seg_colors) - 1) if seg_colors else 0
+        out_colors.append(seg_colors[mid] if seg_colors else _FREE_FLOW_COLOR)
 
-    return sampled, seg_speeds
+    return sampled, out_colors
 
 
 def bbox_center_zoom(coords, tile_px=64):
@@ -265,10 +298,7 @@ def _draw_route(img, coords, clon, clat, zoom, speeds=None):
     if len(pixels) >= 2:
         for i in range(len(pixels) - 1):
             p1, p2 = pixels[i], pixels[i + 1]
-            if speeds and i < len(speeds):
-                col = speed_to_color(speeds[i])
-            else:
-                col = FREE_FLOW
+            col = speeds[i] if speeds and i < len(speeds) else FREE_FLOW
             draw.line([p1, p2], fill=col, width=3)
 
     # Origin dot — red with white outline  (r=6 at 128px → ~3px on 64px LED)
@@ -585,13 +615,13 @@ def main():
                     la, lna, _      = geo_a
                     lb, lnb, name_b = geo_b
 
-                    dur, route_coords, route_speeds = get_route(la, lna, lb, lnb)
+                    dur, route_coords, route_colors = get_route(la, lna, lb, lnb)
                     wx                              = get_weather(lb, lnb, WEATHER_UNITS)
 
                     # Fetch map image if Mapbox is configured
                     map_img = None
                     if MAPBOX_TOKEN and HAS_PIL and route_coords:
-                        map_img = fetch_map_image(route_coords, route_speeds)
+                        map_img = fetch_map_image(route_coords, route_colors)
 
                     data = {
                         "dest_name":    name_b,
