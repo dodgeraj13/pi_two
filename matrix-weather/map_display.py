@@ -145,7 +145,7 @@ def get_weather(lat, lon, units="imperial"):
     return None
 
 
-def simplify_coords(coords, max_points=80):
+def simplify_coords(coords, max_points=60):
     """Downsample route coordinate list to at most max_points (for URL length)."""
     if len(coords) <= max_points:
         return coords
@@ -155,10 +155,42 @@ def simplify_coords(coords, max_points=80):
     return sampled
 
 
+def bbox_center_zoom(coords, tile_px=64):
+    """Calculate Mapbox center lon/lat and integer zoom to fit all coords.
+
+    Uses the Web Mercator tile formula so the whole route fits in the tile
+    with a small padding border.
+    """
+    import math
+    lons = [c[0] for c in coords]
+    lats = [c[1] for c in coords]
+    min_lon, max_lon = min(lons), max(lons)
+    min_lat, max_lat = min(lats), max(lats)
+
+    # 15 % padding on each side
+    pad_lon = max((max_lon - min_lon) * 0.18, 0.005)
+    pad_lat = max((max_lat - min_lat) * 0.18, 0.005)
+    min_lon -= pad_lon; max_lon += pad_lon
+    min_lat -= pad_lat; max_lat += pad_lat
+
+    center_lon = (min_lon + max_lon) / 2
+    center_lat = (min_lat + max_lat) / 2
+
+    # Zoom that fits the bbox width in tile_px pixels (Mercator tiles are 512px at z0 in Mapbox)
+    lon_span = max_lon - min_lon
+    lat_span = max_lat - min_lat
+    zoom_lon = math.log2(360 / lon_span) if lon_span > 0 else 14
+    zoom_lat = math.log2(170 / lat_span) if lat_span > 0 else 14
+    zoom = max(1, min(14, int(min(zoom_lon, zoom_lat))))
+
+    return center_lon, center_lat, zoom
+
+
 def fetch_map_image(route_coords):
     """Fetch a 64×64 Mapbox static map tile with the route overlaid.
 
-    Uses the traffic-day-v2 style so live traffic colours show through.
+    Uses explicit center/zoom (calculated from the route bounding box) rather
+    than the 'auto' camera, which requires a premium Mapbox plan.
     Returns a PIL Image (RGB) or None on failure.
     """
     if not HAS_PIL or not MAPBOX_TOKEN or not route_coords:
@@ -179,12 +211,18 @@ def fetch_map_image(route_coords):
         }
         geojson_str = json.dumps(geojson_feature, separators=(',', ':'))
         overlay     = f"geojson({geojson_str})"
-        url = f"{MAPBOX}/{overlay}/auto/64x64?padding=5&access_token={MAPBOX_TOKEN}"
+
+        clon, clat, zoom = bbox_center_zoom(simplified)
+        url = (
+            f"{MAPBOX}/{overlay}"
+            f"/{clon:.5f},{clat:.5f},{zoom},0"
+            f"/64x64?access_token={MAPBOX_TOKEN}"
+        )
         r = requests.get(url, timeout=20)
         if r.status_code == 200:
             img = Image.open(io.BytesIO(r.content)).convert("RGB")
             img = img.resize((64, 64), Image.LANCZOS)
-            print("[map] Map View image fetched OK", flush=True)
+            print(f"[map] Map View image fetched OK (zoom={zoom})", flush=True)
             return img
         else:
             print(f"[map] Mapbox HTTP {r.status_code}: {r.text[:200]}", flush=True)
