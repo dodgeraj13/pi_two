@@ -102,15 +102,15 @@ def geocode(address: str):
 
 
 def get_route(lat_a, lon_a, lat_b, lon_b):
-    """Return (duration_seconds, route_coords) or (None, None).
+    """Return (duration_seconds, route_coords, speeds) or (None, None, None).
 
     route_coords is a list of [lon, lat] pairs in GeoJSON order.
-    Requests full geometry so we can draw the route on the Mapbox static image.
+    speeds is a list of m/s values — one per consecutive coord pair (len = len(coords)-1).
     """
     try:
         url = (
             f"{OSRM}/{lon_a:.6f},{lat_a:.6f};{lon_b:.6f},{lat_b:.6f}"
-            "?overview=full&geometries=geojson"
+            "?overview=full&geometries=geojson&annotations=speed"
         )
         r = requests.get(url, timeout=15)
         d = r.json()
@@ -118,10 +118,14 @@ def get_route(lat_a, lon_a, lat_b, lon_b):
             route  = d["routes"][0]
             dur    = route["duration"]
             coords = route["geometry"]["coordinates"]   # [[lon,lat], ...]
-            return dur, coords
+            try:
+                speeds = route["legs"][0]["annotation"]["speed"]
+            except (KeyError, IndexError):
+                speeds = []
+            return dur, coords, speeds
     except Exception as e:
         print(f"[map] routing error: {e}", flush=True)
-    return None, None
+    return None, None, None
 
 
 def get_weather(lat, lon, units="imperial"):
@@ -146,14 +150,29 @@ def get_weather(lat, lon, units="imperial"):
     return None
 
 
-def simplify_coords(coords, max_points=60):
-    """Downsample route coordinate list to at most max_points (for URL length)."""
-    if len(coords) <= max_points:
-        return coords
-    step = len(coords) / max_points
+def simplify_route(coords, speeds, max_points=60):
+    """Downsample coords to at most max_points; average speeds for each simplified segment.
+
+    Returns (simplified_coords, per_segment_speeds) where per_segment_speeds has
+    len(simplified_coords)-1 entries — one average m/s value per drawn segment.
+    """
+    n = len(coords)
+    if n <= max_points:
+        # speeds has n-1 entries; return as-is
+        return coords, speeds
+
+    step = n / max_points
     sampled = [coords[int(i * step)] for i in range(max_points)]
-    sampled.append(coords[-1])   # always include destination
-    return sampled
+    sampled.append(coords[-1])
+
+    seg_speeds = []
+    for i in range(len(sampled) - 1):
+        i1 = int(i * step)
+        i2 = min(int((i + 1) * step), len(speeds))
+        chunk = speeds[i1:i2] if speeds and i1 < i2 else []
+        seg_speeds.append(sum(chunk) / len(chunk) if chunk else 20.0)
+
+    return sampled, seg_speeds
 
 
 def bbox_center_zoom(coords, tile_px=64):
@@ -194,36 +213,22 @@ def bbox_center_zoom(coords, tile_px=64):
     return center_lon, center_lat, zoom
 
 
-def dark_traffic_filter(img):
-    """Post-process the Mapbox tile into true dark mode.
+def speed_to_color(mps):
+    """Map OSRM speed (m/s) to a traffic RGB colour.
 
-    Keeps traffic-coloured roads (red / amber / green) and water (blue).
-    Everything else → black.  Pure Python + colorsys; no numpy required.
+    OSRM speeds are road-type theoretical, not live traffic, but still give a
+    useful relative signal: motorways fast, city streets slow.
+      > 80 km/h  → blue/green (free flow)
+      40–80 km/h → yellow     (moderate)
+      < 40 km/h  → red        (slow / urban)
     """
-    try:
-        import colorsys
-        src = img.load()
-        w, h = img.size
-        out = Image.new("RGB", (w, h), (0, 0, 0))
-        dst = out.load()
-        for y in range(h):
-            for x in range(w):
-                r, g, b  = src[x, y]
-                hue, sat, val = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
-                is_red   = (hue < 0.06 or hue > 0.93) and sat > 0.30 and val > 0.18
-                is_amber = 0.07 < hue < 0.21           and sat > 0.40 and val > 0.18
-                is_green = 0.24 < hue < 0.46           and sat > 0.22 and val > 0.18
-                is_water = 0.50 < hue < 0.72           and sat > 0.12 and val > 0.08
-                if is_red or is_amber or is_green:
-                    dst[x, y] = (r, g, b)
-                elif is_water:
-                    dst[x, y] = (min(255, int(r * 1.6)),
-                                 min(255, int(g * 1.6)),
-                                 min(255, int(b * 1.6)))
-        return out
-    except Exception as e:
-        print(f"[map] dark filter error: {e}", flush=True)
-        return img
+    kmh = mps * 3.6
+    if kmh > 80:
+        return (30, 200, 100)   # green-blue — fast
+    elif kmh > 40:
+        return (255, 200, 0)    # amber — moderate
+    else:
+        return (220, 50, 50)    # red — slow
 
 
 # ── PIL route drawing helpers ─────────────────────────────────────────────────
@@ -243,35 +248,28 @@ def _lonlat_to_px(lon, lat, clon, clat, zoom, tile_px, retina=2):
     return int(round(px)), int(round(py))
 
 
-def _draw_route(img, coords, clon, clat, zoom):
+def _draw_route(img, coords, clon, clat, zoom, speeds=None):
     """Draw the route polyline + origin/destination circles onto img (in-place).
 
-    Each segment is coloured by sampling the filtered Mapbox tile at its midpoint:
-      - tile already has traffic colour (blue/yellow/red) → use that colour
-      - tile is black (road filtered out / no data)       → use blue (free flow)
-
-    This lets the custom Mapbox style drive the traffic colour scale while
-    the PIL line makes the specific route clearly visible at 3 px width.
+    Each segment is coloured using OSRM speed annotations (speeds list, m/s):
+      green-blue = fast, amber = moderate, red = slow.
+    Falls back to blue if no speed data.
     """
     from PIL import ImageDraw
 
-    draw   = ImageDraw.Draw(img)
-    tile   = img.width                               # 128 at @2x
-    pixels = [_lonlat_to_px(c[0], c[1], clon, clat, zoom, tile) for c in coords]
-
-    FREE_FLOW = (30, 120, 255)   # blue — no congestion / no data
-    px        = img.load()       # PIL pixel accessor — no numpy needed
+    draw      = ImageDraw.Draw(img)
+    tile      = img.width                                  # 128 at @2x
+    pixels    = [_lonlat_to_px(c[0], c[1], clon, clat, zoom, tile) for c in coords]
+    FREE_FLOW = (30, 120, 255)
 
     if len(pixels) >= 2:
         for i in range(len(pixels) - 1):
             p1, p2 = pixels[i], pixels[i + 1]
-            # Midpoint of this segment → sample tile colour
-            mx = max(0, min(tile - 1, (p1[0] + p2[0]) // 2))
-            my = max(0, min(tile - 1, (p1[1] + p2[1]) // 2))
-            r, g, b = px[mx, my]   # PIL uses (x, y) order
-            # Use sampled colour if meaningful; otherwise default to free-flow blue
-            seg_col = (r, g, b) if (r > 25 or g > 25 or b > 25) else FREE_FLOW
-            draw.line([p1, p2], fill=seg_col, width=3)
+            if speeds and i < len(speeds):
+                col = speed_to_color(speeds[i])
+            else:
+                col = FREE_FLOW
+            draw.line([p1, p2], fill=col, width=3)
 
     # Origin dot — red with white outline  (r=6 at 128px → ~3px on 64px LED)
     ox, oy = pixels[0]
@@ -284,22 +282,21 @@ def _draw_route(img, coords, clon, clat, zoom):
         draw.ellipse([dx-rad, dy-rad, dx+rad, dy+rad], fill=col)
 
 
-def fetch_map_image(route_coords):
-    """Fetch a 64×64 Mapbox traffic-night-v2 tile showing live traffic colours.
+def fetch_map_image(route_coords, route_speeds=None):
+    """Fetch a 64×64 Mapbox static tile and draw the route on top.
 
     Steps:
-      1. Fetch clean tile at @2x (128×128) — no overlay, no attribution logo
-      2. Apply dark_traffic_filter (keeps traffic colours + water, kills labels)
-      3. Draw route polyline + origin/destination dots in PIL
-      4. Resize 128→64 for the LED matrix
+      1. Fetch tile at @2x (128×128) — custom style, no attribution
+      2. Draw speed-coloured route polyline + origin/destination dots in PIL
+      3. Resize 128→64 for the LED matrix
+    The custom Mapbox style is used as-is; no colour filtering applied.
     """
     if not HAS_PIL or not MAPBOX_TOKEN or not route_coords:
         return None
     try:
-        simplified       = simplify_coords(route_coords)
-        clon, clat, zoom = bbox_center_zoom(simplified)
+        simplified, seg_speeds = simplify_route(route_coords, route_speeds or [])
+        clon, clat, zoom       = bbox_center_zoom(simplified)
 
-        # No overlay in URL — route is drawn in PIL after filtering
         url = (
             f"{MAPBOX}"
             f"/{clon:.5f},{clat:.5f},{zoom},0"
@@ -312,8 +309,7 @@ def fetch_map_image(route_coords):
             return None
 
         img = Image.open(io.BytesIO(resp.content)).convert("RGB")
-        img = dark_traffic_filter(img)          # black bg, traffic colours only
-        _draw_route(img, simplified, clon, clat, zoom)  # route + endpoint dots
+        _draw_route(img, simplified, clon, clat, zoom, seg_speeds)
         img = img.resize((64, 64), Image.LANCZOS)
         print(f"[map] Map View image fetched OK (zoom={zoom})", flush=True)
         return img
@@ -589,13 +585,13 @@ def main():
                     la, lna, _      = geo_a
                     lb, lnb, name_b = geo_b
 
-                    dur, route_coords = get_route(la, lna, lb, lnb)
-                    wx                = get_weather(lb, lnb, WEATHER_UNITS)
+                    dur, route_coords, route_speeds = get_route(la, lna, lb, lnb)
+                    wx                              = get_weather(lb, lnb, WEATHER_UNITS)
 
                     # Fetch map image if Mapbox is configured
                     map_img = None
                     if MAPBOX_TOKEN and HAS_PIL and route_coords:
-                        map_img = fetch_map_image(route_coords)
+                        map_img = fetch_map_image(route_coords, route_speeds)
 
                     data = {
                         "dest_name":    name_b,
