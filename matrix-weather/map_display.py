@@ -189,7 +189,7 @@ def bbox_center_zoom(coords, tile_px=64):
     zoom_lon = math.log2(tile_px * 360 / (512 * lon_span)) if lon_span > 0 else 10
     zoom_lat = math.log2(tile_px * 360 * lat_cos / (512 * lat_span)) if lat_span > 0 else 10
 
-    zoom = max(1, min(14, math.floor(min(zoom_lon, zoom_lat))))
+    zoom = max(1, min(14, math.floor(min(zoom_lon, zoom_lat)) + 1))
 
     return center_lon, center_lat, zoom
 
