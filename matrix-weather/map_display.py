@@ -30,6 +30,7 @@ Args (passed by agent):
 """
 
 import argparse, io, json, os, sys, time
+from urllib.parse import quote
 
 import requests
 
@@ -79,7 +80,7 @@ SUBMODE_INTERVAL   = 9     # seconds before switching between Basic and Map View
 NOMINATIM = "https://nominatim.openstreetmap.org/search"
 OSRM      = "http://router.project-osrm.org/route/v1/driving"
 OWM       = "https://api.openweathermap.org/data/2.5/weather"
-MAPBOX    = "https://api.mapbox.com/styles/v1/mapbox/navigation-night-v1/static"
+MAPBOX    = "https://api.mapbox.com/styles/v1/mapbox/traffic-day-v2/static"
 
 
 def geocode(address: str):
@@ -194,24 +195,37 @@ def bbox_center_zoom(coords, tile_px=64):
 
 
 def fetch_map_image(route_coords):
-    """Fetch a 64×64 Mapbox static map tile showing the route area.
+    """Fetch a 64×64 Mapbox traffic-day-v2 tile with the route drawn on it.
 
-    Uses simple pin-marker overlays (free tier) to mark origin and destination,
-    centred on the route bounding box.  GeoJSON overlays require a premium plan.
-    Returns a PIL Image (RGB) or None on failure.
+    Uses traffic-day-v2 so roads show live green/yellow/red traffic colours.
+    The route is drawn as a URL-encoded GeoJSON LineString overlay (white line)
+    so the specific path stands out against the traffic background.
+    No pins or labels — the focus is purely on traffic patterns.
     """
     if not HAS_PIL or not MAPBOX_TOKEN or not route_coords:
         return None
     try:
-        origin = route_coords[0]   # [lon, lat]
-        dest   = route_coords[-1]  # [lon, lat]
+        simplified = simplify_coords(route_coords)
 
-        # Two coloured pins: red for origin, green for destination
-        pin_a   = f"pin-s+ff4444({origin[0]:.5f},{origin[1]:.5f})"
-        pin_b   = f"pin-s+44ff88({dest[0]:.5f},{dest[1]:.5f})"
-        overlay = f"{pin_a},{pin_b}"
+        # Build the GeoJSON route overlay — a semi-transparent white line
+        # so it's visible on top of any traffic colour without hiding the colours.
+        geojson = {
+            "type": "Feature",
+            "properties": {
+                "stroke":         "#ffffff",
+                "stroke-width":   2,
+                "stroke-opacity": 0.75,
+            },
+            "geometry": {
+                "type":        "LineString",
+                "coordinates": simplified,
+            },
+        }
+        # URL-encode the GeoJSON so special chars don't confuse the router
+        geojson_enc = quote(json.dumps(geojson, separators=(',', ':')), safe='')
+        overlay     = f"geojson({geojson_enc})"
 
-        clon, clat, zoom = bbox_center_zoom(route_coords)
+        clon, clat, zoom = bbox_center_zoom(simplified)
         url = (
             f"{MAPBOX}/{overlay}"
             f"/{clon:.5f},{clat:.5f},{zoom},0"
