@@ -187,32 +187,24 @@ def bbox_center_zoom(coords, tile_px=64):
 
 
 def fetch_map_image(route_coords):
-    """Fetch a 64×64 Mapbox static map tile with the route overlaid.
+    """Fetch a 64×64 Mapbox static map tile showing the route area.
 
-    Uses explicit center/zoom (calculated from the route bounding box) rather
-    than the 'auto' camera, which requires a premium Mapbox plan.
+    Uses simple pin-marker overlays (free tier) to mark origin and destination,
+    centred on the route bounding box.  GeoJSON overlays require a premium plan.
     Returns a PIL Image (RGB) or None on failure.
     """
     if not HAS_PIL or not MAPBOX_TOKEN or not route_coords:
         return None
     try:
-        simplified = simplify_coords(route_coords)
-        geojson_feature = {
-            "type": "Feature",
-            "properties": {
-                "stroke":         "#3399ff",
-                "stroke-width":   2,
-                "stroke-opacity": 0.9,
-            },
-            "geometry": {
-                "type":        "LineString",
-                "coordinates": simplified,
-            },
-        }
-        geojson_str = json.dumps(geojson_feature, separators=(',', ':'))
-        overlay     = f"geojson({geojson_str})"
+        origin = route_coords[0]   # [lon, lat]
+        dest   = route_coords[-1]  # [lon, lat]
 
-        clon, clat, zoom = bbox_center_zoom(simplified)
+        # Two coloured pins: red for origin, green for destination
+        pin_a   = f"pin-s+ff4444({origin[0]:.5f},{origin[1]:.5f})"
+        pin_b   = f"pin-s+44ff88({dest[0]:.5f},{dest[1]:.5f})"
+        overlay = f"{pin_a},{pin_b}"
+
+        clon, clat, zoom = bbox_center_zoom(route_coords)
         url = (
             f"{MAPBOX}/{overlay}"
             f"/{clon:.5f},{clat:.5f},{zoom},0"
