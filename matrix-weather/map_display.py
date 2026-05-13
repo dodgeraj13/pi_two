@@ -268,25 +268,44 @@ def _lonlat_to_px(lon, lat, clon, clat, zoom, tile_px):
 
 
 def _draw_route(img, coords, clon, clat, zoom):
-    """Draw the route polyline + origin/destination circles onto img (in-place)."""
+    """Draw the route polyline + origin/destination circles onto img (in-place).
+
+    Each segment is coloured by sampling the filtered Mapbox tile at its midpoint:
+      - tile already has traffic colour (blue/yellow/red) → use that colour
+      - tile is black (road filtered out / no data)       → use blue (free flow)
+
+    This lets the custom Mapbox style drive the traffic colour scale while
+    the PIL line makes the specific route clearly visible at 3 px width.
+    """
+    import numpy as np
     from PIL import ImageDraw
+
     draw   = ImageDraw.Draw(img)
     tile   = img.width                               # 128 at @2x
     pixels = [_lonlat_to_px(c[0], c[1], clon, clat, zoom, tile) for c in coords]
 
-    # Route line — light grey so it's visible but doesn't dominate the traffic colours
+    FREE_FLOW = (30, 120, 255)   # blue  — no congestion / no data
+    arr       = np.array(img)    # (H, W, 3) uint8 — sample traffic colours here
+
     if len(pixels) >= 2:
         for i in range(len(pixels) - 1):
-            draw.line([pixels[i], pixels[i+1]], fill=(200, 200, 200), width=2)
+            p1, p2 = pixels[i], pixels[i + 1]
+            # Midpoint of this segment → sample tile colour
+            mx = max(0, min(tile - 1, (p1[0] + p2[0]) // 2))
+            my = max(0, min(tile - 1, (p1[1] + p2[1]) // 2))
+            r, g, b = int(arr[my, mx, 0]), int(arr[my, mx, 1]), int(arr[my, mx, 2])
+            # Use sampled colour if meaningful; otherwise default to free-flow blue
+            seg_col = (r, g, b) if (r > 25 or g > 25 or b > 25) else FREE_FLOW
+            draw.line([p1, p2], fill=seg_col, width=3)
 
-    # Origin dot — red with white outline  (r=6 at 128px → ~3px radius on 64px LED)
+    # Origin dot — red with white outline  (r=6 at 128px → ~3px on 64px LED)
     ox, oy = pixels[0]
-    for col, rad in [((255, 255, 255), 7), ((220, 60, 60), 5)]:
+    for col, rad in [((255, 255, 255), 7), ((220, 60, 60), 6)]:
         draw.ellipse([ox-rad, oy-rad, ox+rad, oy+rad], fill=col)
 
     # Destination dot — green with white outline
     dx, dy = pixels[-1]
-    for col, rad in [((255, 255, 255), 7), ((60, 210, 90), 5)]:
+    for col, rad in [((255, 255, 255), 7), ((60, 210, 90), 6)]:
         draw.ellipse([dx-rad, dy-rad, dx+rad, dy+rad], fill=col)
 
 
