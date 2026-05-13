@@ -74,7 +74,7 @@ HEARTBEAT_FILE     = "/tmp/matrix-heartbeat-9"
 HEARTBEAT_INTERVAL = 30    # seconds
 UPDATE_INTERVAL    = 300   # re-fetch data every 5 minutes
 SCROLL_DELAY       = 0.05  # seconds per scroll tick
-SUBMODE_INTERVAL   = 9     # seconds before switching between Basic and Map View
+SUBMODE_INTERVAL   = 10    # seconds before switching between Basic and Map View
 
 # ── APIs ──────────────────────────────────────────────────────────────────────
 NOMINATIM         = "https://nominatim.openstreetmap.org/search"
