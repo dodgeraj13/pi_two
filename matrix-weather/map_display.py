@@ -241,7 +241,7 @@ def bbox_center_zoom(coords, tile_px=64):
     zoom_lon = math.log2(tile_px * 360 / (512 * lon_span)) if lon_span > 0 else 10
     zoom_lat = math.log2(tile_px * 360 * lat_cos / (512 * lat_span)) if lat_span > 0 else 10
 
-    zoom = max(1, min(14, math.floor(min(zoom_lon, zoom_lat)) + 1))
+    zoom = max(1, min(14, math.floor(min(zoom_lon, zoom_lat))))
 
     return center_lon, center_lat, zoom
 
@@ -587,6 +587,8 @@ def main():
     data            = {"loading": True, "dest_name": MAP_ADDRESS_B}
     last_fetch      = 0.0
     last_hb         = 0.0
+    last_map_fetch  = 0.0
+    MAP_REFRESH     = 300   # re-fetch map tile every 5 min (traffic updates)
     # submode cycling: 0 = Basic screen, 1 = Map View screen
     # MAP_SUBMODE env controls whether we cycle, pin to basic, or pin to map
     submode         = 0 if MAP_SUBMODE != "map" else 1
@@ -632,6 +634,7 @@ def main():
                         "error":        "" if wx else "weather err",
                         "map_img":      map_img,
                         "route_coords": route_coords,
+                        "route_colors": route_colors,
                     }
                     print(
                         f"[map] {name_b} | drive={fmt_duration(dur)} | wx={wx} "
@@ -650,6 +653,16 @@ def main():
                 print(f"[map] fetch exception: {e}", flush=True)
                 data["loading"] = False
                 data.setdefault("error", str(e))
+
+        # ── Map tile refresh (traffic updates every 5 min) ───────────────
+        if (MAPBOX_TOKEN and HAS_PIL
+                and data.get("route_coords")
+                and not data.get("loading")
+                and now - last_map_fetch >= MAP_REFRESH):
+            new_img = fetch_map_image(data["route_coords"], data.get("route_colors", []))
+            if new_img:
+                data["map_img"] = new_img
+            last_map_fetch = now
 
         # ── Submode cycling ───────────────────────────────────────────────
         map_view_available = MAPBOX_TOKEN and HAS_PIL and data.get("map_img") is not None
