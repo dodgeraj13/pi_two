@@ -50,6 +50,7 @@ class Runner:
         self.map_address_b = ""     # destination for map mode
         self.map_label_a   = ""     # friendly label for origin  (e.g. "Home")
         self.map_label_b   = ""     # friendly label for destination (e.g. "Work")
+        self.map_submode   = "alternate"  # "basic" | "map" | "alternate"
         self.mlb_proc: subprocess.Popen | None = None
         self.music_proc: subprocess.Popen | None = None
         self.clock_proc: subprocess.Popen | None = None
@@ -306,6 +307,7 @@ class Runner:
                 f"MAP_ADDRESS_B={self.map_address_b}",
                 f"MAP_LABEL_A={self.map_label_a}",
                 f"MAP_LABEL_B={self.map_label_b}",
+                f"MAP_SUBMODE={self.map_submode}",
                 f"WEATHER_UNITS={self.units}",
             ]
             if weather_api_key:
@@ -591,6 +593,8 @@ async def ws_loop():
         runner.map_label_a = map_cfg["label_a"].strip()
     if map_cfg.get("label_b") is not None:
         runner.map_label_b = map_cfg["label_b"].strip()
+    if map_cfg.get("submode") in ("basic", "map", "alternate"):
+        runner.map_submode = map_cfg["submode"]
 
     # initial sync
     s = fetch_state()
@@ -629,16 +633,21 @@ async def ws_loop():
                         addr_b   = data.get("address_b",   "").strip()
                         label_a  = data.get("label_a",     "").strip()
                         label_b  = data.get("label_b",     "").strip()
-                        changed  = (addr_a  != runner.map_address_a or
-                                    addr_b  != runner.map_address_b or
-                                    label_a != runner.map_label_a   or
-                                    label_b != runner.map_label_b)
+                        submode  = data.get("submode",     "alternate").strip()
+                        if submode not in ("basic", "map", "alternate"):
+                            submode = "alternate"
+                        changed  = (addr_a   != runner.map_address_a or
+                                    addr_b   != runner.map_address_b or
+                                    label_a  != runner.map_label_a   or
+                                    label_b  != runner.map_label_b   or
+                                    submode  != runner.map_submode)
                         if changed:
                             runner.map_address_a = addr_a
                             runner.map_address_b = addr_b
                             runner.map_label_a   = label_a
                             runner.map_label_b   = label_b
-                            print(f"[agent] map config updated: A={addr_a!r} ({label_a!r}) B={addr_b!r} ({label_b!r})", flush=True)
+                            runner.map_submode   = submode
+                            print(f"[agent] map config updated: A={addr_a!r} B={addr_b!r} submode={submode!r}", flush=True)
                             if runner.mode == 9:
                                 runner._force_restart()
                     elif data.get("type") == "cmd" and data.get("cmd") == "update":

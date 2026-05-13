@@ -69,6 +69,7 @@ MAP_ADDRESS_B   = os.getenv("MAP_ADDRESS_B", "").strip()
 MAP_LABEL_A     = os.getenv("MAP_LABEL_A",   "").strip()   # e.g. "Home"
 MAP_LABEL_B     = os.getenv("MAP_LABEL_B",   "").strip()   # e.g. "Work"
 MAPBOX_TOKEN    = os.getenv("MAPBOX_TOKEN",  "").strip()
+MAP_SUBMODE     = os.getenv("MAP_SUBMODE",   "alternate").strip()  # "basic" | "map" | "alternate"
 
 HEARTBEAT_FILE     = "/tmp/matrix-heartbeat-9"
 HEARTBEAT_INTERVAL = 30    # seconds
@@ -80,7 +81,7 @@ SUBMODE_INTERVAL   = 9     # seconds before switching between Basic and Map View
 NOMINATIM = "https://nominatim.openstreetmap.org/search"
 OSRM      = "http://router.project-osrm.org/route/v1/driving"
 OWM       = "https://api.openweathermap.org/data/2.5/weather"
-MAPBOX    = "https://api.mapbox.com/styles/v1/mapbox/traffic-day-v2/static"
+MAPBOX    = "https://api.mapbox.com/styles/v1/mapbox/traffic-night-v2/static"
 
 
 def geocode(address: str):
@@ -194,46 +195,99 @@ def bbox_center_zoom(coords, tile_px=64):
     return center_lon, center_lat, zoom
 
 
-def fetch_map_image(route_coords):
-    """Fetch a 64×64 Mapbox traffic-day-v2 tile with the route drawn on it.
+def dark_traffic_filter(img):
+    """Post-process a Mapbox traffic-night-v2 tile into true dark mode.
 
-    Uses traffic-day-v2 so roads show live green/yellow/red traffic colours.
-    The route is drawn as a URL-encoded GeoJSON LineString overlay (white line)
-    so the specific path stands out against the traffic background.
-    No pins or labels — the focus is purely on traffic patterns.
+    Keeps only:
+      - Traffic-coloured road pixels (red / amber / green)
+      - Water pixels (blue hue)
+    Everything else (background, labels, non-traffic roads) → pure black.
+
+    Uses numpy for fast vectorised HSV conversion.
+    """
+    try:
+        import numpy as np
+        arr  = np.array(img, dtype=np.float32) / 255.0   # (H, W, 3) 0-1 RGB
+        r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
+
+        cmax  = np.maximum(np.maximum(r, g), b)
+        cmin  = np.minimum(np.minimum(r, g), b)
+        delta = cmax - cmin
+
+        # Saturation (HSV)
+        sat = np.where(cmax > 1e-6, delta / cmax, 0.0)
+
+        # Hue 0-1  (only meaningful where delta > 0)
+        eps = 1e-6
+        hue = np.zeros_like(r)
+        mr = (cmax == r) & (delta > eps)
+        mg = (cmax == g) & (delta > eps)
+        mb = (cmax == b) & (delta > eps)
+        hue[mr] = (((g[mr] - b[mr]) / (delta[mr] + eps)) % 6) / 6
+        hue[mg] = ((b[mg] - r[mg]) / (delta[mg] + eps) + 2) / 6
+        hue[mb] = ((r[mb] - g[mb]) / (delta[mb] + eps) + 4) / 6
+
+        # Traffic colours (fairly broad to survive JPEG compression)
+        is_red    = ((hue < 0.06) | (hue > 0.93)) & (sat > 0.30) & (cmax > 0.18)
+        is_amber  = (hue > 0.07) & (hue < 0.21) & (sat > 0.30) & (cmax > 0.18)
+        is_green  = (hue > 0.24) & (hue < 0.46) & (sat > 0.22) & (cmax > 0.18)
+        # Water — blue hue, lower saturation threshold
+        is_water  = (hue > 0.50) & (hue < 0.72) & (sat > 0.12) & (cmax > 0.08)
+
+        keep = is_red | is_amber | is_green | is_water
+
+        result        = np.zeros_like(arr)
+        result[keep]  = arr[keep]
+        # Slightly boost water so it reads clearly on the LED panel
+        result[is_water] = np.clip(arr[is_water] * 1.6, 0, 1)
+
+        return Image.fromarray((result * 255).astype(np.uint8))
+    except Exception as e:
+        print(f"[map] dark filter error: {e}", flush=True)
+        return img
+
+
+def fetch_map_image(route_coords):
+    """Fetch a 64×64 Mapbox traffic-night-v2 tile with the route drawn on it.
+
+    Fetches at @2x (128×128) for better road detail, then applies the
+    dark_traffic_filter (kills labels & background, keeps traffic colours
+    and water), and finally resizes to 64×64 for the LED matrix.
     """
     if not HAS_PIL or not MAPBOX_TOKEN or not route_coords:
         return None
     try:
         simplified = simplify_coords(route_coords)
 
-        # Build the GeoJSON route overlay — a semi-transparent white line
-        # so it's visible on top of any traffic colour without hiding the colours.
+        # White route line so the driven path is visible on the dark tile
         geojson = {
             "type": "Feature",
             "properties": {
                 "stroke":         "#ffffff",
                 "stroke-width":   2,
-                "stroke-opacity": 0.75,
+                "stroke-opacity": 0.80,
             },
             "geometry": {
                 "type":        "LineString",
                 "coordinates": simplified,
             },
         }
-        # URL-encode the GeoJSON so special chars don't confuse the router
         geojson_enc = quote(json.dumps(geojson, separators=(',', ':')), safe='')
         overlay     = f"geojson({geojson_enc})"
 
         clon, clat, zoom = bbox_center_zoom(simplified)
+        # Request @2x so we get 128×128 for higher-quality downsampling
         url = (
             f"{MAPBOX}/{overlay}"
             f"/{clon:.5f},{clat:.5f},{zoom},0"
-            f"/64x64?access_token={MAPBOX_TOKEN}"
+            f"/64x64@2x?access_token={MAPBOX_TOKEN}"
         )
         r = requests.get(url, timeout=20)
         if r.status_code == 200:
             img = Image.open(io.BytesIO(r.content)).convert("RGB")
+            # Apply dark-mode filter (removes labels / background)
+            img = dark_traffic_filter(img)
+            # Downscale 128×128 → 64×64
             img = img.resize((64, 64), Image.LANCZOS)
             print(f"[map] Map View image fetched OK (zoom={zoom})", flush=True)
             return img
@@ -483,8 +537,11 @@ def main():
     data            = {"loading": True, "dest_name": MAP_ADDRESS_B}
     last_fetch      = 0.0
     last_hb         = 0.0
-    submode         = 0    # 0 = Basic, 1 = Map View
+    # submode cycling: 0 = Basic screen, 1 = Map View screen
+    # MAP_SUBMODE env controls whether we cycle, pin to basic, or pin to map
+    submode         = 0 if MAP_SUBMODE != "map" else 1
     last_switch     = 0.0
+    print(f"[map] submode={MAP_SUBMODE!r}", flush=True)
 
     while True:
         now = time.time()
@@ -545,14 +602,17 @@ def main():
                 data.setdefault("error", str(e))
 
         # ── Submode cycling ───────────────────────────────────────────────
-        # Only cycle to Map View if we actually have an image to show.
         map_view_available = MAPBOX_TOKEN and HAS_PIL and data.get("map_img") is not None
-        if map_view_available:
-            if now - last_switch >= SUBMODE_INTERVAL:
-                submode     = 1 - submode
-                last_switch = now
-        else:
-            if submode != 0:
+        if MAP_SUBMODE == "basic":
+            submode = 0
+        elif MAP_SUBMODE == "map":
+            submode = 1 if map_view_available else 0
+        else:  # "alternate"
+            if map_view_available:
+                if now - last_switch >= SUBMODE_INTERVAL:
+                    submode     = 1 - submode
+                    last_switch = now
+            else:
                 submode     = 0
                 last_switch = now
 
