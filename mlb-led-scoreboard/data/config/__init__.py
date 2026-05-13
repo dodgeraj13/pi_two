@@ -133,6 +133,8 @@ class Config:
                 "Using default preferred_divisions, {}".format(DEFAULT_PREFERRED_DIVISIONS)
             )
             self.preferred_divisions = DEFAULT_PREFERRED_DIVISIONS
+        if isinstance(self.preferred_divisions, list) and len(self.preferred_divisions) == 0:
+            self.preferred_divisions = DEFAULT_PREFERRED_DIVISIONS
         if isinstance(self.preferred_divisions, str):
             division = self.preferred_divisions
             self.preferred_divisions = [division]
