@@ -38,7 +38,7 @@ HOTSPOT_SSID       = "Matrix-Setup"
 HOTSPOT_PASSWORD   = "matrix1234"
 HOTSPOT_CON_NAME   = "matrix-hotspot"
 HOTSPOT_IP         = "10.42.0.1"
-HTTP_PORT          = 80
+HTTP_PORT          = 8080
 
 # NetworkManager writes a shared dnsmasq config here when in hotspot mode.
 # Adding address=/#/<ip> makes every DNS query resolve to our IP so phones
