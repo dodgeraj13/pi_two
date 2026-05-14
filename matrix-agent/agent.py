@@ -78,6 +78,21 @@ class Runner:
             os.killpg(os.getpgid(p.pid), signal.SIGTERM)
         except Exception as e:
             print(f"[agent] stop {name} error: {e}", flush=True)
+            return None
+        # Wait for process to fully exit so the new process can acquire the LED hardware
+        try:
+            p.wait(timeout=4)
+            print(f"[agent] {name} exited cleanly", flush=True)
+        except subprocess.TimeoutExpired:
+            print(f"[agent] {name} did not exit in time — sending SIGKILL", flush=True)
+            try:
+                os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+            except Exception:
+                pass
+            try:
+                p.wait(timeout=2)
+            except Exception:
+                pass
         return None
 
     def _pixel_mapper(self):
