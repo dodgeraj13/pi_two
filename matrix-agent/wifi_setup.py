@@ -246,28 +246,24 @@ def _try_scroll_text(matrix, stop_event) -> bool:
         return False
 
 
-def start_led_display(stop_event: threading.Event) -> None:
+def _led_body(stop_event: threading.Event) -> None:
     """
-    Single daemon thread: try QR code first, fall back to scroll text.
-    The QR code is static so the thread just sleeps once rendered.
+    LED display body — runs in a daemon thread.
+    Tries QR code first, falls back to scroll text.
     """
-    def _body():
-        matrix = _make_matrix()
-        if matrix is None:
-            print(f"[led] {SCROLL_TEXT.strip()}")
-            return
-        try:
-            if _try_show_qr(matrix):
-                # QR is static — just hold it until stop is requested
-                while not stop_event.is_set():
-                    time.sleep(0.5)
-            else:
-                _try_scroll_text(matrix, stop_event)
-        finally:
-            matrix.Clear()
-
-    t = threading.Thread(target=_body, daemon=True)
-    t.start()
+    matrix = _make_matrix()
+    if matrix is None:
+        print(f"[led] Matrix unavailable — skipping display.")
+        return
+    try:
+        if _try_show_qr(matrix):
+            # QR is static — hold it until stop is requested
+            while not stop_event.is_set():
+                time.sleep(0.5)
+        else:
+            _try_scroll_text(matrix, stop_event)
+    finally:
+        matrix.Clear()
 
 
 # ──────────────────────────────────────────────
@@ -559,7 +555,7 @@ def main() -> int:
     # ── 4. Start LED display: QR code if possible, else scroll text ──────
     led_stop = threading.Event()
     led_thread = threading.Thread(
-        target=start_led_display, args=(led_stop,), daemon=True
+        target=_led_body, args=(led_stop,), daemon=True
     )
     led_thread.start()
 
