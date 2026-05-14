@@ -158,11 +158,18 @@ def connect_to_network(ssid: str, password: str):
     try:
         result = _nmcli(*args, timeout=30)
     except subprocess.TimeoutExpired:
-        return False, "Timed out after 30 s"
+        # Clean up any partial/bad profile NM may have saved
+        _nmcli("connection", "delete", ssid)
+        return False, "Timed out — check your password and try again"
     if result.returncode == 0:
         print(f"[wifi] Connected to '{ssid}'.")
         return True, ""
+    # Delete the bad profile so NM doesn't keep retrying wrong credentials on boot
+    _nmcli("connection", "delete", ssid)
     err = result.stderr.strip() or result.stdout.strip()
+    # Friendlier message for the most common failure
+    if "secrets were required" in err.lower() or "password" in err.lower():
+        err = "Wrong password — please try again"
     print(f"[wifi] Failed: {err}")
     return False, err
 
