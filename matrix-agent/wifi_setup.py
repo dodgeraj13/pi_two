@@ -154,15 +154,10 @@ def stop_hotspot() -> None:
     _nmcli("con", "delete", HOTSPOT_CON_NAME)
     print("[wifi] Hotspot stopped.")
 
-def scan_networks() -> list:
-    """Scan for WiFi networks. Must be called BEFORE hotspot is created (wlan0 in client mode)."""
-    print("[wifi] Scanning for networks...")
-    _nmcli("device", "wifi", "rescan")
-    time.sleep(2)
-    result = _nmcli("-t", "-f", "SSID,SIGNAL,SECURITY", "device", "wifi", "list")
+def _parse_scan_output(stdout: str) -> list:
     seen = set()
     networks = []
-    for line in result.stdout.splitlines():
+    for line in stdout.splitlines():
         parts = line.split(":")
         if len(parts) < 3:
             continue
@@ -178,8 +173,25 @@ def scan_networks() -> list:
             sig_int = 0
         networks.append({"ssid": ssid, "signal": sig_int, "security": security})
     networks.sort(key=lambda n: n["signal"], reverse=True)
-    print(f"[wifi] Found {len(networks)} networks")
     return networks
+
+def scan_networks(retries: int = 3) -> list:
+    """
+    Scan for WiFi networks. Call BEFORE creating the hotspot — wlan0 can't
+    scan while in AP mode. Retries up to `retries` times with a short delay.
+    """
+    for attempt in range(1, retries + 1):
+        print(f"[wifi] Scanning for networks (attempt {attempt}/{retries})...")
+        _nmcli("device", "wifi", "rescan")
+        time.sleep(3)
+        result = _nmcli("-t", "-f", "SSID,SIGNAL,SECURITY", "device", "wifi", "list")
+        networks = _parse_scan_output(result.stdout)
+        if networks:
+            print(f"[wifi] Found {len(networks)} networks")
+            return networks
+        print("[wifi] No networks found yet — retrying...")
+    print("[wifi] Scan complete — no networks found (user can enter manually)")
+    return []
 
 def connect_to_network(ssid: str, password: str):
     print(f"[wifi] Connecting to '{ssid}' ...")
@@ -337,6 +349,8 @@ HTML_PAGE = """<!DOCTYPE html>
   <p class="sub">Connect your Matrix display to your home network.</p>
   <label>Network</label>
   <select id="net"><option value="">— tap Scan to find networks —</option></select>
+  <label id="manualLabel" style="display:none;margin-top:.5rem">Or enter network name manually</label>
+  <input type="text" id="manualSsid" placeholder="Network name (SSID)" style="display:none;width:100%;padding:.65rem .75rem;background:#111;border:1px solid #444;border-radius:8px;color:#e0e0e0;font-size:1rem;margin-bottom:1rem"/>
   <label>Password</label>
   <input type="password" id="pw" placeholder="WiFi password"/>
   <button class="scan" id="scanBtn" onclick="doScan()">Scan for networks</button>
@@ -345,38 +359,51 @@ HTML_PAGE = """<!DOCTYPE html>
 </div>
 <script>
 const sel=document.getElementById('net'),connBtn=document.getElementById('connBtn'),st=document.getElementById('st');
+const manualSsid=document.getElementById('manualSsid'),manualLabel=document.getElementById('manualLabel');
 function show(msg,t){st.textContent=msg;st.className=t;st.style.display='block'}
-sel.onchange=()=>{connBtn.disabled=sel.value===''};
-// On load, check if a previous attempt failed
+function getSSID(){return sel.value||manualSsid.value.trim()}
+sel.onchange=()=>{connBtn.disabled=!getSSID()};
+manualSsid.oninput=()=>{connBtn.disabled=!getSSID()};
+// On load, check if a previous attempt failed and load cached networks
 window.addEventListener('load',async()=>{
   try{
     const s=await(await fetch('/status')).json();
     if(s.error)show('Previous attempt failed: '+s.error+' — please try again.','err');
   }catch(_){}
+  // Auto-load cached scan results on page open
+  await doScan();
 });
 async function doScan(){
   const btn=document.getElementById('scanBtn');
-  btn.disabled=true;btn.textContent='Scanning…';
-  show('Scanning for networks…','inf');
+  btn.disabled=true;btn.textContent='Loading…';
   try{
     const nets=await(await fetch('/scan')).json();
     sel.innerHTML='<option value="">— choose a network —</option>';
-    if(!nets.length){show('No networks found. Try again.','inf')}
-    else{
+    if(!nets.length){
+      show('No networks found automatically. Enter your network name below.','inf');
+      manualLabel.style.display='block';
+      manualSsid.style.display='block';
+    }else{
       nets.forEach(n=>{
         const o=document.createElement('option');
         o.value=n.ssid;
         o.textContent=n.ssid+'  ('+n.signal+'%)'+(n.security?'  🔒':'');
         sel.appendChild(o);
       });
-      show('Found '+nets.length+' network(s).','inf');
+      manualLabel.style.display='block';
+      manualSsid.style.display='block';
+      show('Found '+nets.length+' network(s). Select yours or type it below.','inf');
     }
-  }catch(e){show('Scan failed: '+e.message,'err')}
-  finally{btn.disabled=false;btn.textContent='Scan for networks'}
+  }catch(e){
+    show('Could not load networks. Enter your network name below.','err');
+    manualLabel.style.display='block';
+    manualSsid.style.display='block';
+  }
+  finally{btn.disabled=false;btn.textContent='Refresh'}
 }
 async function doConnect(){
-  const ssid=sel.value,pw=document.getElementById('pw').value;
-  if(!ssid){show('Please select a network.','err');return}
+  const ssid=getSSID(),pw=document.getElementById('pw').value;
+  if(!ssid){show('Please select or enter a network name.','err');return}
   connBtn.disabled=true;
   show('Connecting to "'+ssid+'"… up to 30 seconds.','inf');
   const form=new URLSearchParams();form.append('ssid',ssid);form.append('password',pw);
