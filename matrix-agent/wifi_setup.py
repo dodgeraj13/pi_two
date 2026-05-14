@@ -155,6 +155,8 @@ def stop_hotspot() -> None:
     print("[wifi] Hotspot stopped.")
 
 def scan_networks() -> list:
+    """Scan for WiFi networks. Must be called BEFORE hotspot is created (wlan0 in client mode)."""
+    print("[wifi] Scanning for networks...")
     _nmcli("device", "wifi", "rescan")
     time.sleep(2)
     result = _nmcli("-t", "-f", "SSID,SIGNAL,SECURITY", "device", "wifi", "list")
@@ -176,6 +178,7 @@ def scan_networks() -> list:
             sig_int = 0
         networks.append({"ssid": ssid, "signal": sig_int, "security": security})
     networks.sort(key=lambda n: n["signal"], reverse=True)
+    print(f"[wifi] Found {len(networks)} networks")
     return networks
 
 def connect_to_network(ssid: str, password: str):
@@ -217,7 +220,7 @@ _CAPTIVE_PROBE_PATHS = {
     "/redirect",               # Windows
 }
 
-_server_state = {"success": False, "last_error": ""}
+_server_state = {"success": False, "last_error": "", "networks": []}
 
 
 class ProvisionHandler(BaseHTTPRequestHandler):
@@ -254,7 +257,7 @@ class ProvisionHandler(BaseHTTPRequestHandler):
         elif path == "/":
             self._html(HTML_PAGE)
         elif path == "/scan":
-            self._json(scan_networks())
+            self._json(_server_state["networks"])
         elif path == "/status":
             self._json({"error": _server_state["last_error"]})
         else:
@@ -462,6 +465,9 @@ def main() -> int:
     if not wlan0_exists():
         print("[wifi] ERROR: wlan0 not found.")
         return 1
+
+    # Scan for networks BEFORE creating hotspot — wlan0 can't scan in AP mode
+    _server_state["networks"] = scan_networks()
 
     # Write captive portal DNS config BEFORE creating hotspot so NM picks it up
     _write_captive_conf()
