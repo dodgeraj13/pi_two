@@ -312,6 +312,9 @@ sudo visudo -c -f "$SUDOERS_FILE" >/dev/null && ok "sudoers entry valid" || die 
 # ── systemd service ───────────────────────────────────────────────
 section "Installing systemd service"
 
+chmod +x "$REPO_DIR/matrix-agent/start.sh"
+ok "start.sh marked executable"
+
 sudo tee /etc/systemd/system/matrix-agent.service >/dev/null <<EOF
 [Unit]
 Description=Matrix Agent (Backend <-> Pi LED Display)
@@ -322,7 +325,7 @@ Wants=network-online.target
 Type=simple
 User=$WHOAMI
 WorkingDirectory=$REPO_DIR/matrix-agent
-ExecStart=$REPO_DIR/matrix-agent/.venv/bin/python agent.py
+ExecStart=/bin/bash $REPO_DIR/matrix-agent/start.sh
 Restart=always
 RestartSec=5
 StandardOutput=journal
