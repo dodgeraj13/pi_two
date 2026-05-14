@@ -709,6 +709,14 @@ async def ws_loop():
                             print(f"[agent] map config updated: A={addr_a!r} B={addr_b!r} submode={submode!r}", flush=True)
                             if runner.mode == 9:
                                 runner._force_restart()
+                    elif data.get("type") == "mlb_config":
+                        # Re-fetch and write config; restart MLB if it's currently running
+                        print("[agent] mlb_config update received — rewriting config", flush=True)
+                        fetch_and_write_mlb_config(runner)
+                        if runner.mode == 1:
+                            print("[agent] MLB is running — restarting to apply new config", flush=True)
+                            runner.mlb_proc = runner._stop("mlb", runner.mlb_proc)
+                            runner._start_mlb()
                     elif data.get("type") == "schedule":
                         runner.schedule_enabled = bool(data.get("enabled", False))
                         runner.schedule_slots   = data.get("slots", [])
