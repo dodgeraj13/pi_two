@@ -66,7 +66,8 @@ class Schedule:
                 for game in self.__all_games  # only care if preferred team is actually in list
             )
         else:
-            return True
+            # No preferred team means "watch all teams" — never treat it as an off-day
+            return False
 
     def is_offday(self):
         return not len(self.__all_games)  # care about all MLB
@@ -79,7 +80,9 @@ class Schedule:
 
     def get_preferred_game(self):
         team_index = self._game_index_for_preferred_team()
-        self.current_idx = team_index
+        # _game_index_for_preferred_team returns -1 when no preferred team is set.
+        # Fall back to 0 so we start on the first game, not the last.
+        self.current_idx = max(team_index, 0)
         return self.__current_game()
 
     def next_game(self):
