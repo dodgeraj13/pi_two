@@ -264,16 +264,15 @@ class ProvisionHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?")[0]
-        if path in _CAPTIVE_PROBE_PATHS:
-            self._redirect(f"http://{HOTSPOT_IP}:{HTTP_PORT}/")
-        elif path == "/":
-            self._html(HTML_PAGE)
-        elif path == "/scan":
+        if path == "/scan":
             self._json(_server_state["networks"])
         elif path == "/status":
             self._json({"error": _server_state["last_error"]})
         else:
-            self.send_error(404)
+            # Serve the setup page for everything else — including captive portal
+            # probes (/generate_204, /hotspot-detect.html, etc.) and favicon.
+            # No redirects = no reload loops.
+            self._html(HTML_PAGE)
 
     def do_POST(self):
         if self.path != "/connect":
