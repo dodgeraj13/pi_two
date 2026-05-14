@@ -273,7 +273,7 @@ class ProvisionHandler(BaseHTTPRequestHandler):
         elif path == "/status":
             self._json({"error": _server_state["last_error"]})
         else:
-            self._redirect(f"http://{HOTSPOT_IP}:{HTTP_PORT}/")
+            self.send_error(404)
 
     def do_POST(self):
         if self.path != "/connect":
