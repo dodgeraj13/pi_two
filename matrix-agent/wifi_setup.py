@@ -38,7 +38,7 @@ HOTSPOT_SSID       = "Matrix-Setup"
 HOTSPOT_PASSWORD   = "matrix1234"
 HOTSPOT_CON_NAME   = "matrix-hotspot"
 HOTSPOT_IP         = "10.42.0.1"
-HTTP_PORT          = 8080
+HTTP_PORT          = 8080   # server listens here; iptables redirects :80 → :8080
 
 # NetworkManager writes a shared dnsmasq config here when in hotspot mode.
 # Adding address=/#/<ip> makes every DNS query resolve to our IP so phones
@@ -99,6 +99,33 @@ def _remove_captive_conf() -> None:
     try:
         subprocess.run(["sudo", "-n", "rm", "-f", NM_CAPTIVE_CONF],
                        capture_output=True, text=True)
+    except Exception:
+        pass
+
+def _add_port_redirect() -> None:
+    """Redirect port 80 → 8080 so captive portal probes reach our server."""
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", "iptables", "-t", "nat", "-A", "PREROUTING",
+             "-i", "wlan0", "-p", "tcp", "--dport", "80",
+             "-j", "REDIRECT", "--to-port", str(HTTP_PORT)],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            print(f"[wifi] iptables: port 80 → {HTTP_PORT}")
+        else:
+            print(f"[wifi] iptables redirect failed: {result.stderr.strip()}")
+    except Exception as e:
+        print(f"[wifi] iptables error: {e}")
+
+def _remove_port_redirect() -> None:
+    try:
+        subprocess.run(
+            ["sudo", "-n", "iptables", "-t", "nat", "-D", "PREROUTING",
+             "-i", "wlan0", "-p", "tcp", "--dport", "80",
+             "-j", "REDIRECT", "--to-port", str(HTTP_PORT)],
+            capture_output=True, text=True
+        )
     except Exception:
         pass
 
@@ -391,6 +418,7 @@ def main() -> int:
         return 1
 
     time.sleep(1)
+    _add_port_redirect()
     server = start_http_server()
 
     print(f"[wifi] Ready — phone should show 'Sign in to network' automatically.")
@@ -409,6 +437,7 @@ def main() -> int:
             server.shutdown()
         except Exception:
             pass
+        _remove_port_redirect()
         _nmcli("con", "delete", HOTSPOT_CON_NAME)
         _remove_captive_conf()
         print("[wifi] Done.")
