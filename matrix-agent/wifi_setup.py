@@ -409,7 +409,7 @@ async function doConnect(){
   try{
     await fetch('/connect',{method:'POST',body:form});
     // Got a response — hotspot still up — means we're connecting in background
-    show('Connecting… please wait up to 30 seconds. If this page disappears, you\'re connected!','inf');
+    show('Connecting... please wait up to 30 seconds. If this page disappears, you are connected!','inf');
   }catch(e){
     // "Failed to fetch" = hotspot dropped = connected successfully
     show('Connected! Switch back to your home WiFi — your Matrix display is online.','ok');
