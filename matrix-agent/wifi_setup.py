@@ -165,60 +165,108 @@ def connect_to_network(ssid: str, password: str) -> tuple[bool, str]:
 # LED matrix display (optional)
 # ──────────────────────────────────────────────
 
-def start_led_scroll(stop_event: threading.Event) -> None:
+def _make_matrix():
+    """Initialise and return an RGBMatrix, or None on failure."""
+    try:
+        from rgbmatrix import RGBMatrix, RGBMatrixOptions  # type: ignore
+        options = RGBMatrixOptions()
+        options.rows = 64
+        options.cols = 64
+        options.hardware_mapping = "adafruit-hat-pwm"
+        options.gpio_slowdown = 2
+        options.disable_hardware_pulsing = True
+        return RGBMatrix(options=options)
+    except Exception as e:
+        print(f"[led] Could not initialise matrix: {e}")
+        return None
+
+
+def _try_show_qr(matrix) -> bool:
     """
-    Start a daemon thread that scrolls setup instructions on the LED matrix.
-    Falls back to a plain print if rgbmatrix is not available.
+    Draw a WiFi QR code on the matrix. Returns True on success.
+    The QR encodes the WIFI: URI so phones auto-connect on scan.
     """
     try:
-        # Import inside try/except so script works without the library
-        from rgbmatrix import RGBMatrix, RGBMatrixOptions, graphics  # type: ignore
-        _run_led_scroll(stop_event, RGBMatrix, RGBMatrixOptions, graphics)
+        import qrcode  # type: ignore
+        wifi_uri = f"WIFI:S:{HOTSPOT_SSID};T:WPA;P:{HOTSPOT_PASSWORD};;"
+        qr = qrcode.QRCode(
+            version=None,              # auto-select smallest version
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=2,
+            border=2,
+        )
+        qr.add_data(wifi_uri)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="white", back_color="black").convert("RGB")
+
+        # Centre the QR on the 64×64 canvas
+        off_x = max(0, (64 - img.width)  // 2)
+        off_y = max(0, (64 - img.height) // 2)
+
+        canvas = matrix.CreateFrameCanvas()
+        canvas.Clear()
+        for y in range(min(img.height, 64)):
+            for x in range(min(img.width, 64)):
+                r, g, b = img.getpixel((x, y))
+                canvas.SetPixel(off_x + x, off_y + y, r, g, b)
+        matrix.SwapOnVSync(canvas)
+        print(f"[led] QR code displayed ({img.width}×{img.height} px).")
+        return True
     except ImportError:
-        print("[led] rgbmatrix not available — skipping LED display.")
-        print(f"[led] {SCROLL_TEXT.strip()}")
+        print("[led] qrcode library not installed — falling back to scroll text.")
+        return False
+    except Exception as e:
+        print(f"[led] QR render error: {e}")
+        return False
 
 
-def _run_led_scroll(stop_event, RGBMatrix, RGBMatrixOptions, graphics) -> None:
-    """Internal: configure matrix and scroll text in a daemon thread."""
+def _try_scroll_text(matrix, stop_event) -> bool:
+    """Scroll setup instructions across the matrix. Returns True if started."""
+    try:
+        from rgbmatrix import graphics  # type: ignore
+        if not os.path.exists(FONT_PATH):
+            print(f"[led] Font not found at {FONT_PATH}")
+            return False
+        font = graphics.Font()
+        font.LoadFont(FONT_PATH)
+        white = graphics.Color(255, 255, 255)
+        canvas = matrix.CreateFrameCanvas()
+        pos = canvas.width
+        while not stop_event.is_set():
+            canvas.Clear()
+            length = graphics.DrawText(canvas, font, pos, 48, white, SCROLL_TEXT)
+            pos -= 1
+            if pos + length < 0:
+                pos = canvas.width
+            canvas = matrix.SwapOnVSync(canvas)
+            time.sleep(0.03)
+        return True
+    except Exception as e:
+        print(f"[led] Scroll error: {e}")
+        return False
 
-    def _thread_body():
+
+def start_led_display(stop_event: threading.Event) -> None:
+    """
+    Single daemon thread: try QR code first, fall back to scroll text.
+    The QR code is static so the thread just sleeps once rendered.
+    """
+    def _body():
+        matrix = _make_matrix()
+        if matrix is None:
+            print(f"[led] {SCROLL_TEXT.strip()}")
+            return
         try:
-            options = RGBMatrixOptions()
-            options.rows                = 64
-            options.cols                = 64
-            options.hardware_mapping    = "adafruit-hat-pwm"
-            options.gpio_slowdown       = 2
-            options.disable_hardware_pulsing = True
-
-            matrix = RGBMatrix(options=options)
-            canvas = matrix.CreateFrameCanvas()
-
-            font = graphics.Font()
-            if not os.path.exists(FONT_PATH):
-                print(f"[led] Font not found at {FONT_PATH} — skipping LED display.")
-                return
-            font.LoadFont(FONT_PATH)
-
-            white = graphics.Color(255, 255, 255)
-            text  = SCROLL_TEXT
-            pos   = canvas.width  # start off-screen to the right
-
-            while not stop_event.is_set():
-                canvas.Clear()
-                text_len = graphics.DrawText(canvas, font, pos, 48, white, text)
-                pos -= 1
-                if pos + text_len < 0:
-                    pos = canvas.width   # reset scroll
-
-                canvas = matrix.SwapOnVSync(canvas)
-                time.sleep(0.03)  # ~33 fps scroll speed
-
+            if _try_show_qr(matrix):
+                # QR is static — just hold it until stop is requested
+                while not stop_event.is_set():
+                    time.sleep(0.5)
+            else:
+                _try_scroll_text(matrix, stop_event)
+        finally:
             matrix.Clear()
-        except Exception as e:
-            print(f"[led] Error in LED thread: {e}")
 
-    t = threading.Thread(target=_thread_body, daemon=True)
+    t = threading.Thread(target=_body, daemon=True)
     t.start()
 
 
@@ -508,10 +556,10 @@ def main() -> int:
         print("[wifi] ERROR: Failed to create hotspot — check nmcli / sudo permissions.")
         return 1
 
-    # ── 4. Start LED scroll (daemon thread) ──────────────────────────────
+    # ── 4. Start LED display: QR code if possible, else scroll text ──────
     led_stop = threading.Event()
     led_thread = threading.Thread(
-        target=start_led_scroll, args=(led_stop,), daemon=True
+        target=start_led_display, args=(led_stop,), daemon=True
     )
     led_thread.start()
 

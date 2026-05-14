@@ -186,7 +186,7 @@ section "Agent Python venv"
 cd "$REPO_DIR/matrix-agent"
 python3 -m venv .venv
 .venv/bin/pip install --upgrade pip --quiet
-.venv/bin/pip install --quiet requests websockets python-dotenv pillow
+.venv/bin/pip install --quiet requests websockets python-dotenv pillow qrcode
 .venv/bin/pip install --quiet "$RGBMATRIX_WHL"
 ok "Agent venv ready at $REPO_DIR/matrix-agent/.venv"
 

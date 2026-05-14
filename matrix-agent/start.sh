@@ -17,9 +17,15 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PYTHON="$SCRIPT_DIR/.venv/bin/python"
+
+# Fall back to system python3 if venv not yet built
+if [[ ! -x "$PYTHON" ]]; then
+  PYTHON=python3
+fi
 
 echo "[start] Checking WiFi connectivity..."
-python3 "$SCRIPT_DIR/wifi_setup.py" || true
+$PYTHON "$SCRIPT_DIR/wifi_setup.py" || true
 
 echo "[start] Starting matrix agent..."
-exec python3 "$SCRIPT_DIR/agent.py"
+exec $PYTHON "$SCRIPT_DIR/agent.py"
