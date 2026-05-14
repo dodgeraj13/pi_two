@@ -361,10 +361,19 @@ async function doConnect(){
   show('Connecting to "'+ssid+'"… up to 30 seconds.','inf');
   const form=new URLSearchParams();form.append('ssid',ssid);form.append('password',pw);
   try{
-    const d=await(await fetch('/connect',{method:'POST',body:form})).json();
-    if(d.ok){show('Connected! Your Matrix display is online. You can close this page.','ok')}
-    else{show('Failed: '+(d.error||'unknown error'),'err');connBtn.disabled=false}
-  }catch(e){show('Error: '+e.message,'err');connBtn.disabled=false}
+    const resp=await fetch('/connect',{method:'POST',body:form});
+    let d={ok:false,error:'unknown'};
+    try{d=await resp.json()}catch(_){}
+    if(d.ok){
+      show('Connected! Switch back to your home WiFi — your Matrix display is online.','ok');
+    }else{
+      show('Wrong password or connection failed — please try again.','err');
+      connBtn.disabled=false;
+    }
+  }catch(e){
+    // "Failed to fetch" means the hotspot dropped because we connected successfully
+    show('Connected! Switch back to your home WiFi — your Matrix display is online.','ok');
+  }
 }
 </script>
 </body>
